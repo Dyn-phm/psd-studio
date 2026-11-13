@@ -1,5 +1,5 @@
 // ============================================================================
-// PSD STUDIO LOCAL — CORE ENGINE (FONT, LAYER EFFECTS, CLIPPING, MASK, TOUCH)
+// PSD STUDIO LOCAL — CORE ENGINE (UNIVERSAL PSD/CMYK/RGB, LIVE TEXT, FULL GROUP EDIT)
 // ============================================================================
 
 let openedFilesQueue = [];
@@ -45,6 +45,7 @@ window.addEventListener('DOMContentLoaded', () => {
   initFileInputs();
   initCanvasInteractions();
   initKeyboardShortcuts();
+  initClipboardPaste();
 });
 
 function switchMobileTab(tabName) {
@@ -65,6 +66,27 @@ function toggleTheme() {
   document.getElementById('btnThemeToggle').textContent = isDark ? '🌙 Giao diện Tối' : '☀️ Giao diện Sáng';
 }
 
+// Hỗ trợ Ctrl+V dán ảnh trực tiếp từ Clipboard vào thành Layer mới
+function initClipboardPaste() {
+  window.addEventListener('paste', async (e) => {
+    const tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea') return;
+    if (!e.clipboardData || !e.clipboardData.items) return;
+    for (const item of e.clipboardData.items) {
+      if (item.type.indexOf('image') !== -1) {
+        const file = item.getAsFile();
+        if (file) {
+          if (currentPsd) {
+            await handleAddNewImageLayer(file);
+          } else {
+            await handleOpenFile(file);
+          }
+        }
+      }
+    }
+  });
+}
+
 // ============================================================================
 // QUẢN LÝ HOÀN TÁC (UNDO CTRL+Z)
 // ============================================================================
@@ -73,6 +95,7 @@ function cloneLayerTreeForUndo(children) {
   return children.map(item => {
     const copy = Object.assign({}, item);
     delete copy._parent;
+    delete copy._groupPreviewCanvas;
     if (item.effects) copy.effects = JSON.parse(JSON.stringify(item.effects));
     if (item.text) copy.text = JSON.parse(JSON.stringify(item.text));
     if (item.children) copy.children = cloneLayerTreeForUndo(item.children);
@@ -88,7 +111,6 @@ function pushUndoState(label) {
     childrenSnapshot: cloneLayerTreeForUndo(currentPsd.children),
     selectedId: selectedLayerId
   });
-  // Khi người dùng đã chỉnh sửa, tự động chuyển sang chế độ Live Layer Composite
   const viewModeSel = document.getElementById('selRenderMode');
   if (viewModeSel && viewModeSel.value === 'psd_composite') {
     viewModeSel.value = 'live_layers';
@@ -131,12 +153,14 @@ function initKeyboardShortcuts() {
     } else if (e.key === 'Delete' && selectedLayerId) {
       e.preventDefault();
       deleteSelectedLayer();
+    } else if (e.key === 'Escape') {
+      closeInlineTextEditor();
     }
   });
 }
 
 // ============================================================================
-// ĐỌC FILE PSD, ẢNH JPG/PNG & NẠP FONT TÙY CHỈNH (.TTF / .OTF)
+// ĐỌC MỌI FILE PSD (Ở BẤT KỲ Ổ ĐĨA / THƯ MỤC NÀO), ẢNH JPG/PNG & NẠP FONT
 // ============================================================================
 function initFileInputs() {
   const psdFileInput = document.getElementById('psdFileInput');
@@ -211,16 +235,18 @@ async function loadCustomFontFile(file) {
 
     if (!customLoadedFonts.includes(fontName)) {
       customLoadedFonts.push(fontName);
-      const sel = document.getElementById('inpTextFont');
-      if (sel) {
-        const opt = document.createElement('option');
-        opt.value = fontName;
-        opt.textContent = `⭐ ${fontName} (Font vừa nạp)`;
-        sel.insertBefore(opt, sel.firstChild);
-        sel.value = fontName;
-      }
+      ['inpTextFont', 'inlineTextFont'].forEach(selId => {
+        const sel = document.getElementById(selId);
+        if (sel) {
+          const opt = document.createElement('option');
+          opt.value = fontName;
+          opt.textContent = `⭐ ${fontName} (Font vừa nạp)`;
+          sel.insertBefore(opt, sel.firstChild);
+          sel.value = fontName;
+        }
+      });
     }
-    setStatus(`Đã nạp thành công Font chữ "${fontName}"! Bạn có thể áp dụng cho mọi Text Layer.`);
+    setStatus(`Đã nạp thành công Font chữ "${fontName}"! Có thể dùng để sửa chữ trực tiếp.`);
   } catch (err) {
     alert('Không thể nạp file Font này: ' + err.message);
   }
@@ -228,29 +254,41 @@ async function loadCustomFontFile(file) {
 
 function ingestFileList(fileList) {
   const allFiles = Array.from(fileList);
-  // Nạp tự động các file font (.ttf, .otf, .woff) nếu có trong thư mục
+  // Nạp tự động mọi file font (.ttf, .otf, .woff) nếu có trong danh sách chọn
   allFiles.filter(f => /\.(ttf|otf|woff|woff2)$/i.test(f.name)).forEach(f => loadCustomFontFile(f));
 
   const supported = allFiles.filter(f => {
     const ext = f.name.split('.').pop().toLowerCase();
-    return ['psd', 'psb', 'png', 'jpg', 'jpeg', 'webp'].includes(ext);
+    return ['psd', 'psb', 'png', 'jpg', 'jpeg', 'webp', 'svg'].includes(ext);
   });
 
   if (supported.length === 0) {
-    alert('Không tìm thấy file .PSD, .PNG, .JPG nào trong lựa chọn vừa rồi.');
+    alert('Không tìm thấy file .PSD, .PSB, .PNG, .JPG, .WEBP nào trong lựa chọn vừa rồi.');
     return;
   }
 
   supported.sort((a, b) => {
-    const aPsd = a.name.toLowerCase().endsWith('.psd') ? 0 : 1;
-    const bPsd = b.name.toLowerCase().endsWith('.psd') ? 0 : 1;
+    const aPsd = /\.(psd|psb)$/i.test(a.name) ? 0 : 1;
+    const bPsd = /\.(psd|psb)$/i.test(b.name) ? 0 : 1;
     if (aPsd !== bPsd) return aPsd - bPsd;
     return a.name.localeCompare(b.name);
   });
 
-  openedFilesQueue = supported;
-  renderFileTabs();
-  switchToFileTab(0);
+  // Gộp thêm vào danh sách tab đang mở hoặc thay mới nếu chọn thư mục
+  if (supported.length === 1 && openedFilesQueue.length > 0) {
+    const existIdx = openedFilesQueue.findIndex(f => f.name === supported[0].name && f.size === supported[0].size);
+    if (existIdx !== -1) {
+      switchToFileTab(existIdx);
+      return;
+    }
+    openedFilesQueue.push(supported[0]);
+    renderFileTabs();
+    switchToFileTab(openedFilesQueue.length - 1);
+  } else {
+    openedFilesQueue = supported;
+    renderFileTabs();
+    switchToFileTab(0);
+  }
 }
 
 function renderFileTabs() {
@@ -260,11 +298,11 @@ function renderFileTabs() {
     return;
   }
   bar.style.display = 'flex';
-  bar.innerHTML = `<span style="font-size:11.5px; color:var(--text-secondary); margin-right:4px; font-weight:700;">File (${openedFilesQueue.length}):</span>`;
+  bar.innerHTML = `<span style="font-size:11.5px; color:var(--text-secondary); margin-right:4px; font-weight:700;">Danh sách File (${openedFilesQueue.length}):</span>`;
   openedFilesQueue.forEach((f, idx) => {
     const tab = document.createElement('div');
     tab.className = 'file-tab' + (idx === activeFileIndex ? ' active' : '');
-    const isPsd = f.name.toLowerCase().endsWith('.psd');
+    const isPsd = /\.(psd|psb)$/i.test(f.name);
     tab.innerHTML = `<span>${isPsd ? '🟦' : '🖼️'} ${f.name}</span> <span style="opacity:0.75; font-size:10.5px;">(${formatBytes(f.size)})</span>`;
     tab.onclick = () => switchToFileTab(idx);
     bar.appendChild(tab);
@@ -284,13 +322,14 @@ async function handleOpenFile(file) {
   currentFileSize = file.size;
   undoStack = [];
   updateUndoButtonUI();
+  closeInlineTextEditor();
 
   const ext = file.name.split('.').pop().toLowerCase();
   try {
     if (ext === 'psd' || ext === 'psb') {
       const buffer = await file.arrayBuffer();
       await loadPsdBuffer(buffer, file.name, file.size);
-    } else if (['png', 'jpg', 'jpeg', 'webp'].includes(ext)) {
+    } else if (['png', 'jpg', 'jpeg', 'webp', 'svg'].includes(ext)) {
       await loadStandardImageAsPsd(file);
     }
   } catch (err) {
@@ -310,22 +349,43 @@ async function loadPsdBuffer(arrayBuffer, fileName, fileSize) {
         skipThumbnail: false
       });
     } catch (err1) {
-      console.warn('Thử đọc PSD ở chế độ tương thích mở rộng:', err1);
+      console.warn('Thử đọc PSD với useImageData=true (cho file CMYK / 16-bit / kênh đặc biệt):', err1);
       try {
         psd = agPsd.readPsd(arrayBuffer, {
+          useImageData: true,
           skipLayerImageData: false,
-          skipCompositeImageData: true
+          skipCompositeImageData: false
         });
       } catch (err2) {
-        psd = parsePsdBinaryFallback(arrayBuffer);
+        console.warn('Thử đọc PSD bỏ qua Composite:', err2);
+        try {
+          psd = agPsd.readPsd(arrayBuffer, {
+            useImageData: true,
+            skipLayerImageData: false,
+            skipCompositeImageData: true
+          });
+        } catch (err3) {
+          psd = parsePsdBinaryFallback(arrayBuffer);
+        }
       }
     }
   } else {
     psd = parsePsdBinaryFallback(arrayBuffer);
   }
 
+  // Nếu PSD trả về imageData вместо canvas (do useImageData:true hoặc CMYK), chuyển đổi sang HTML Canvas
+  convertAllImageDataToCanvas(psd);
+
+  // Nếu một số layer vẫn chưa có canvas (ví dụ file PSD hệ màu CMYK=4 hoặc Grayscale=1), giải mã trực tiếp kênh RLE/Raw từ Binary PSD!
+  if (psd.colorMode === 4 || psd.colorMode === 1 || !hasAnyValidLayerCanvas(psd.children)) {
+    try {
+      decodeRawPsdChannelsFallback(arrayBuffer, psd);
+    } catch (e) {
+      console.warn('Giải mã bổ sung CMYK/Raw:', e);
+    }
+  }
+
   currentPsd = psd;
-  // Lưu giữ bản sao ảnh Composite gốc chuẩn 100% của Photoshop (đảm bảo mọi font & hiệu ứng phức tạp hiển thị tuyệt đối chính xác)
   if (currentPsd.canvas) {
     const origComp = document.createElement('canvas');
     origComp.width = currentPsd.canvas.width;
@@ -361,8 +421,280 @@ async function loadPsdBuffer(arrayBuffer, fileName, fileSize) {
   finalizeDocumentLoad(fileName, fileSize);
 }
 
+function hasAnyValidLayerCanvas(children) {
+  if (!children) return false;
+  for (const item of children) {
+    if (item.canvas && item.canvas.width > 0 && item.canvas.height > 0) return true;
+    if (item.children && hasAnyValidLayerCanvas(item.children)) return true;
+  }
+  return false;
+}
+
+function imageDataObjectToCanvas(imgDataObj) {
+  if (!imgDataObj || !imgDataObj.width || !imgDataObj.height || !imgDataObj.data) return null;
+  const c = document.createElement('canvas');
+  c.width = imgDataObj.width;
+  c.height = imgDataObj.height;
+  const ctx = c.getContext('2d');
+  const clamped = (imgDataObj.data instanceof Uint8ClampedArray)
+    ? imgDataObj.data
+    : new Uint8ClampedArray(imgDataObj.data.buffer || imgDataObj.data);
+  const id = new ImageData(clamped, imgDataObj.width, imgDataObj.height);
+  ctx.putImageData(id, 0, 0);
+  return c;
+}
+
+function convertAllImageDataToCanvas(psd) {
+  if (!psd) return;
+  if (!psd.canvas && psd.imageData) {
+    psd.canvas = imageDataObjectToCanvas(psd.imageData);
+  }
+  function walk(children) {
+    if (!children) return;
+    for (const l of children) {
+      if (!l.canvas && l.imageData) {
+        l.canvas = imageDataObjectToCanvas(l.imageData);
+      }
+      if (l.mask && !l.mask.canvas && l.mask.imageData) {
+        l.mask.canvas = imageDataObjectToCanvas(l.mask.imageData);
+      }
+      if (l.children) walk(l.children);
+    }
+  }
+  walk(psd.children);
+}
+
+// Bộ giải mã kênh RLE/Raw trực tiếp cho các file PSD hệ màu CMYK / Grayscale / Đặc biệt
+function decodeRawPsdChannelsFallback(buffer, psd) {
+  const dv = new DataView(buffer);
+  const bytes = new Uint8Array(buffer);
+  let pos = 0;
+
+  function readAscii(len) {
+    let s = '';
+    for (let i = 0; i < len; i++) s += String.fromCharCode(dv.getUint8(pos + i));
+    pos += len;
+    return s;
+  }
+
+  if (readAscii(4) !== '8BPS') return;
+  const version = dv.getUint16(pos, false); pos += 2;
+  const isPsb = (version === 2);
+  pos += 6;
+  const docChannels = dv.getUint16(pos, false); pos += 2;
+  const docHeight = dv.getUint32(pos, false); pos += 4;
+  const docWidth = dv.getUint32(pos, false); pos += 4;
+  const depth = dv.getUint16(pos, false); pos += 2;
+  const colorMode = dv.getUint16(pos, false); pos += 2;
+
+  if (depth !== 8) return; // Xử lý chuẩn cho 8-bit/channel (chiếm 99% file PSD thiết kế)
+
+  const colorDataLen = dv.getUint32(pos, false); pos += 4 + colorDataLen;
+  const imgResLen = dv.getUint32(pos, false); pos += 4 + imgResLen;
+
+  const layerMaskLen = isPsb ? Number(dv.getBigUint64(pos, false)) : dv.getUint32(pos, false);
+  pos += isPsb ? 8 : 4;
+  const layerMaskEnd = pos + layerMaskLen;
+
+  if (layerMaskLen > 0) {
+    const layerInfoLen = isPsb ? Number(dv.getBigUint64(pos, false)) : dv.getUint32(pos, false);
+    pos += isPsb ? 8 : 4;
+    if (layerInfoLen > 0) {
+      const rawCount = dv.getInt16(pos, false); pos += 2;
+      const layerCount = Math.abs(rawCount);
+      const records = [];
+
+      for (let i = 0; i < layerCount; i++) {
+        const top = dv.getInt32(pos, false); pos += 4;
+        const left = dv.getInt32(pos, false); pos += 4;
+        const bottom = dv.getInt32(pos, false); pos += 4;
+        const right = dv.getInt32(pos, false); pos += 4;
+        const numCh = dv.getUint16(pos, false); pos += 2;
+        const chInfos = [];
+        for (let c = 0; c < numCh; c++) {
+          const chId = dv.getInt16(pos, false); pos += 2;
+          const chLen = isPsb ? Number(dv.getBigUint64(pos, false)) : dv.getUint32(pos, false);
+          pos += isPsb ? 8 : 4;
+          chInfos.push({ id: chId, length: chLen });
+        }
+        pos += 12; // 8BIM + blend + opacity + clip + flags + filler
+        const extraLen = dv.getUint32(pos, false); pos += 4;
+        pos += extraLen;
+        records.push({ top, left, bottom, right, chInfos });
+      }
+
+      // Thu thập danh sách phẳng các node không phải GroupEnd theo đúng thứ tự PSD
+      const targetNodes = [];
+      function collectNodesBottomUp(children) {
+        if (!children) return;
+        for (const item of children) {
+          if (item.children) {
+            targetNodes.push({ isGroupStart: true });
+            collectNodesBottomUp(item.children);
+            targetNodes.push({ isGroupEnd: true, node: item });
+          } else {
+            targetNodes.push({ isLeaf: true, node: item });
+          }
+        }
+      }
+      collectNodesBottomUp(psd.children);
+
+      // Đọc dữ liệu kênh của từng Layer Record
+      for (let i = 0; i < records.length; i++) {
+        const rec = records[i];
+        const w = Math.max(0, rec.right - rec.left);
+        const h = Math.max(0, rec.bottom - rec.top);
+        const channelMap = {};
+
+        for (const ch of rec.chInfos) {
+          const chStart = pos;
+          if (w > 0 && h > 0 && ch.length >= 2 && ch.id >= -1 && ch.id <= 3) {
+            const compression = dv.getUint16(pos, false);
+            const dataOffset = pos + 2;
+            const pixelCount = w * h;
+            if (compression === 0 && ch.length - 2 >= pixelCount) {
+              channelMap[ch.id] = bytes.subarray(dataOffset, dataOffset + pixelCount);
+            } else if (compression === 1) {
+              channelMap[ch.id] = decodePackBitsChannel(dv, bytes, dataOffset, h, w, isPsb);
+            }
+          }
+          pos = chStart + ch.length;
+        }
+
+        const matched = targetNodes[i];
+        if (matched && matched.isLeaf && matched.node && !matched.node.canvas && w > 0 && h > 0) {
+          const c = buildCanvasFromChannels(w, h, colorMode, channelMap);
+          if (c) matched.node.canvas = c;
+        }
+      }
+    }
+  }
+
+  // Nếu chưa có ảnh Composite gốc thì giải mã phần Image Data ở cuối file PSD
+  if (!psd.canvas && layerMaskEnd < bytes.length - 4) {
+    pos = layerMaskEnd;
+    const compCompression = dv.getUint16(pos, false); pos += 2;
+    const pixelCount = docWidth * docHeight;
+    const chMap = {};
+    if (compCompression === 0) {
+      for (let c = 0; c < Math.min(docChannels, 4); c++) {
+        chMap[c === 3 && colorMode === 3 ? -1 : c] = bytes.subarray(pos + c * pixelCount, pos + (c + 1) * pixelCount);
+      }
+    } else if (compCompression === 1) {
+      const rowTableSize = docChannels * docHeight * (isPsb ? 4 : 2);
+      let dataPtr = pos + rowTableSize;
+      for (let c = 0; c < docChannels; c++) {
+        const out = new Uint8Array(pixelCount);
+        let outIdx = 0;
+        for (let r = 0; r < docHeight; r++) {
+          const rowBytePos = pos + (c * docHeight + r) * (isPsb ? 4 : 2);
+          const rowBytes = isPsb ? dv.getUint32(rowBytePos, false) : dv.getUint16(rowBytePos, false);
+          outIdx = unpackRleRow(bytes, dataPtr, rowBytes, out, outIdx, docWidth);
+          dataPtr += rowBytes;
+        }
+        if (c < 4) {
+          const key = (colorMode === 3 && c === 3) ? -1 : c;
+          chMap[key] = out;
+        }
+      }
+    }
+    const compCanvas = buildCanvasFromChannels(docWidth, docHeight, colorMode, chMap);
+    if (compCanvas) psd.canvas = compCanvas;
+  }
+}
+
+function decodePackBitsChannel(dv, bytes, offset, h, w, isPsb) {
+  const out = new Uint8Array(w * h);
+  let dataPtr = offset + h * (isPsb ? 4 : 2);
+  let outIdx = 0;
+  for (let r = 0; r < h; r++) {
+    const lenPos = offset + r * (isPsb ? 4 : 2);
+    const rowBytes = isPsb ? dv.getUint32(lenPos, false) : dv.getUint16(lenPos, false);
+    outIdx = unpackRleRow(bytes, dataPtr, rowBytes, out, outIdx, w);
+    dataPtr += rowBytes;
+  }
+  return out;
+}
+
+function unpackRleRow(bytes, start, byteCount, out, outIdx, expectedWidth) {
+  const end = Math.min(bytes.length, start + byteCount);
+  const rowEndIdx = Math.min(out.length, outIdx + expectedWidth);
+  let p = start;
+  while (p < end && outIdx < rowEndIdx) {
+    let n = bytes[p++];
+    if (n >= 128) n -= 256;
+    if (n >= 0) {
+      const count = n + 1;
+      for (let k = 0; k < count && p < end && outIdx < rowEndIdx; k++) {
+        out[outIdx++] = bytes[p++];
+      }
+    } else if (n !== -128) {
+      const count = -n + 1;
+      const val = bytes[p++];
+      for (let k = 0; k < count && outIdx < rowEndIdx; k++) {
+        out[outIdx++] = val;
+      }
+    }
+  }
+  return rowEndIdx;
+}
+
+function buildCanvasFromChannels(w, h, colorMode, channelMap) {
+  if (!channelMap[0]) return null;
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  const ctx = c.getContext('2d');
+  const imgData = ctx.createImageData(w, h);
+  const d = imgData.data;
+  const total = w * h;
+  const alphaCh = channelMap[-1];
+
+  if (colorMode === 4) {
+    // Hệ màu CMYK (Trong PSD: 255 = 0% mực, 0 = 100% mực)
+    const chC = channelMap[0];
+    const chM = channelMap[1] || chC;
+    const chY = channelMap[2] || chC;
+    const chK = channelMap[3];
+    for (let i = 0; i < total; i++) {
+      const cVal = chC[i] / 255;
+      const mVal = chM[i] / 255;
+      const yVal = chY[i] / 255;
+      const kVal = chK ? (chK[i] / 255) : 1;
+      const idx = i * 4;
+      d[idx]     = Math.round(255 * cVal * kVal);
+      d[idx + 1] = Math.round(255 * mVal * kVal);
+      d[idx + 2] = Math.round(255 * yVal * kVal);
+      d[idx + 3] = alphaCh ? alphaCh[i] : 255;
+    }
+  } else if (colorMode === 1) {
+    // Hệ màu Grayscale
+    const chG = channelMap[0];
+    for (let i = 0; i < total; i++) {
+      const idx = i * 4;
+      d[idx] = d[idx + 1] = d[idx + 2] = chG[i];
+      d[idx + 3] = alphaCh ? alphaCh[i] : 255;
+    }
+  } else {
+    // Hệ màu RGB
+    const chR = channelMap[0];
+    const chG = channelMap[1] || chR;
+    const chB = channelMap[2] || chR;
+    for (let i = 0; i < total; i++) {
+      const idx = i * 4;
+      d[idx]     = chR[i];
+      d[idx + 1] = chG[i];
+      d[idx + 2] = chB[i];
+      d[idx + 3] = alphaCh ? alphaCh[i] : 255;
+    }
+  }
+
+  ctx.putImageData(imgData, 0, 0);
+  return c;
+}
+
 // ============================================================================
-// GIẢI MÃ SMART OBJECT, MASK, SOLID FILL & LƯU BITMAP GỐC CỦA LAYER CHỮ/HIỆU ỨNG
+// GIẢI MÃ SMART OBJECT, TÍNH BOUNDING BOX CHO THƯ MỤC (GROUP) & LƯU BITMAP GỐC
 // ============================================================================
 async function decodeEmbeddedSmartObjects(psd) {
   if (!psd.linkedFiles || !psd.linkedFiles.length) return;
@@ -421,7 +753,6 @@ function assignLayerMetadata(children, parentNode, depth) {
     if (typeof item.left !== 'number') item.left = 0;
     if (typeof item.top !== 'number') item.top = 0;
 
-    // Nếu là Solid Color Fill Layer mà chưa có canvas thì dựng canvas màu tương ứng
     if (!item.canvas && !item.children && item.solidColorFill && item.solidColorFill.color) {
       const col = psdColorToCss(item.solidColorFill.color, 1);
       const w = Math.max(1, (item.right > item.left) ? (item.right - item.left) : currentPsd.width);
@@ -443,7 +774,6 @@ function assignLayerMetadata(children, parentNode, depth) {
       item.bottom = item.top + item.canvas.height;
     }
 
-    // Bảo toàn tuyệt đối Bitmap gốc của Layer (chứa đúng Font gốc và Raster của Photoshop)
     if (item.canvas && !item._originalPsdCanvas) {
       const backup = document.createElement('canvas');
       backup.width = item.canvas.width;
@@ -454,17 +784,76 @@ function assignLayerMetadata(children, parentNode, depth) {
     }
 
     if (item.children) {
-      if (typeof item.opened === 'undefined') item.opened = true;
+      if (typeof item._collapsed === 'undefined') item._collapsed = false;
       assignLayerMetadata(item.children, item, depth + 1);
+      computeGroupBounds(item);
     }
   }
+}
+
+// Tính toán khung bao (Bounding Box) của cả một Thư mục (Group) dựa trên các layer con bên trong
+function computeGroupBounds(groupNode) {
+  if (!groupNode || !groupNode.children) return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+  let minL = Infinity, minT = Infinity, maxR = -Infinity, maxB = -Infinity;
+  function scan(list) {
+    for (const child of list) {
+      if (child.hidden) continue;
+      if (child.children) {
+        scan(child.children);
+      } else {
+        const l = child.left || 0;
+        const t = child.top || 0;
+        const r = child.right || 0;
+        const b = child.bottom || 0;
+        if (r > l && b > t) {
+          if (l < minL) minL = l;
+          if (t < minT) minT = t;
+          if (r > maxR) maxR = r;
+          if (b > maxB) maxB = b;
+        }
+      }
+    }
+  }
+  scan(groupNode.children);
+  if (minL === Infinity) {
+    groupNode.left = 0; groupNode.top = 0; groupNode.right = 0; groupNode.bottom = 0;
+    return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
+  }
+  groupNode.left = minL;
+  groupNode.top = minT;
+  groupNode.right = maxR;
+  groupNode.bottom = maxB;
+  return { left: minL, top: minT, right: maxR, bottom: maxB, width: maxR - minL, height: maxB - minT };
+}
+
+// Tạo hình ảnh xem trước (Preview Canvas) cho cả một Thư mục (Group)
+function renderGroupPreviewCanvas(groupNode) {
+  if (!groupNode || !groupNode.children || !currentPsd) return null;
+  const bounds = computeGroupBounds(groupNode);
+  if (bounds.width <= 0 || bounds.height <= 0) return null;
+
+  const fullTemp = document.createElement('canvas');
+  fullTemp.width = currentPsd.width;
+  fullTemp.height = currentPsd.height;
+  const fctx = fullTemp.getContext('2d');
+  drawChildrenList(fctx, groupNode.children, 1);
+
+  const cropped = document.createElement('canvas');
+  cropped.width = Math.max(1, bounds.width);
+  cropped.height = Math.max(1, bounds.height);
+  cropped.getContext('2d').drawImage(
+    fullTemp,
+    bounds.left, bounds.top, bounds.width, bounds.height,
+    0, 0, bounds.width, bounds.height
+  );
+  return cropped;
 }
 
 async function loadStandardImageAsPsd(file) {
   const img = await blobToImage(file);
   const c = document.createElement('canvas');
-  c.width = img.naturalWidth;
-  c.height = img.naturalHeight;
+  c.width = img.naturalWidth || 800;
+  c.height = img.naturalHeight || 600;
   c.getContext('2d').drawImage(img, 0, 0);
 
   currentPsd = {
@@ -495,7 +884,7 @@ async function loadStandardImageAsPsd(file) {
 }
 
 function finalizeDocumentLoad(fileName, fileSize) {
-  ['btnAddImageLayer', 'btnAddTextLayer', 'btnStructureReport', 'btnExportPNG', 'btnExportJPG', 'btnSavePSD'].forEach(id => {
+  ['btnAddImageLayer', 'btnAddTextLayer', 'btnAddGroup', 'btnStructureReport', 'btnExportPNG', 'btnExportJPG', 'btnSavePSD'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.disabled = false;
   });
@@ -508,7 +897,6 @@ function finalizeDocumentLoad(fileName, fileSize) {
   mainCanvas.width = currentPsd.width;
   mainCanvas.height = currentPsd.height;
 
-  // Mặc định hiển thị Kết hợp Layer Động để người dùng ẩn/hiện/xóa/thay thế thấy ngay
   const viewModeSel = document.getElementById('selRenderMode');
   if (viewModeSel) viewModeSel.value = 'live_layers';
 
@@ -522,7 +910,7 @@ function finalizeDocumentLoad(fileName, fileSize) {
     selectLayer(flatLayers[0]._uid);
   }
 
-  setStatus(`Đã tải "${fileName}" — Kích thước: ${currentPsd.width} × ${currentPsd.height} px • Tổng số Layer/Group: ${flatLayers.length}`);
+  setStatus(`Đã tải "${fileName}" — Kích thước: ${currentPsd.width} × ${currentPsd.height} px • Tổng số Layer & Thư mục: ${flatLayers.length}`);
 }
 
 // ============================================================================
@@ -534,7 +922,7 @@ function renderComposite() {
   const ctx = mainCanvas.getContext('2d');
   ctx.clearRect(0, 0, mainCanvas.width, mainCanvas.height);
 
-  // 1. Chế độ Solo (Chỉ xem riêng Layer đang chọn)
+  // 1. Chế độ Solo (Chỉ xem riêng Layer hoặc Thư mục Group đang chọn)
   const soloMode = document.getElementById('chkSoloMode').checked;
   if (soloMode && selectedLayerId) {
     const sel = findLayerById(selectedLayerId);
@@ -545,7 +933,7 @@ function renderComposite() {
     }
   }
 
-  // 2. Chế độ Xem Ảnh Gộp gốc của Photoshop (nếu người dùng chọn xem bản gốc 100%)
+  // 2. Chế độ Xem Ảnh Gộp gốc của Photoshop
   const renderMode = document.getElementById('selRenderMode') ? document.getElementById('selRenderMode').value : 'live_layers';
   if (renderMode === 'psd_composite' && currentPsd._originalCompositeCanvas) {
     ctx.drawImage(currentPsd._originalCompositeCanvas, 0, 0);
@@ -561,7 +949,7 @@ function renderComposite() {
     return;
   }
 
-  // 4. Vẽ đệ quy toàn bộ cây Layer với hỗ trợ đầy đủ Clipping Mask, Layer Mask & Layer Effects
+  // 4. Vẽ đệ quy toàn bộ cây Layer
   drawChildrenList(ctx, currentPsd.children, 1);
   updateSelectionBox();
 }
@@ -573,21 +961,18 @@ function drawChildrenList(ctx, children, parentOpacity) {
   while (i < children.length) {
     const baseLayer = children[i];
 
-    // Kiểm tra xem ngay phía trên baseLayer có các layer dùng Clipping Mask (clipping: true) hay không
     let j = i + 1;
     while (j < children.length && children[j].clipping) {
       j++;
     }
 
     if (j > i + 1) {
-      // Có nhóm Clipping Mask! Nếu baseLayer không bị ẩn, ta vẽ baseLayer vào offscreen canvas rồi clip các layer phía trên vào alpha của baseLayer
       if (!baseLayer.hidden) {
         const groupCanvas = document.createElement('canvas');
         groupCanvas.width = currentPsd.width;
         groupCanvas.height = currentPsd.height;
         const gctx = groupCanvas.getContext('2d');
 
-        // Bước 1: Vẽ Base Layer với độ mờ đầy đủ trên mặt nạ gốc, sau đó áp dụng các Clipped Layer bằng 'source-atop'
         drawSingleNodeRecursive(gctx, baseLayer, 1, false);
 
         for (let k = i + 1; k < j; k++) {
@@ -605,7 +990,6 @@ function drawChildrenList(ctx, children, parentOpacity) {
           gctx.restore();
         }
 
-        // Bước 2: Vẽ kết quả nhóm Clipping lên Canvas chính
         const baseOp = (typeof baseLayer.opacity === 'number' ? baseLayer.opacity : 1) * parentOpacity;
         ctx.save();
         ctx.globalAlpha = Math.max(0, Math.min(1, baseOp));
@@ -628,8 +1012,10 @@ function drawSingleNodeRecursive(ctx, layer, parentOpacity, ignoreHidden) {
   const layerOpacity = (typeof layer.opacity === 'number' ? layer.opacity : 1) * parentOpacity;
 
   if (layer.children && layer.children.length > 0) {
-    // Nếu Group có Blend Mode hoặc Opacity riêng, hoặc có Layer Mask trên Group, vẽ vào buffer nhóm trước
-    const needsGroupBuffer = (layerOpacity < 0.999) || (layer.blendMode && layer.blendMode !== 'normal' && layer.blendMode !== 'pass-through') || (layer.mask && layer.mask.canvas && !layer.mask.disabled);
+    const needsGroupBuffer = (layerOpacity < 0.999) ||
+      (layer.blendMode && layer.blendMode !== 'normal' && layer.blendMode !== 'pass-through') ||
+      (layer.mask && layer.mask.canvas && !layer.mask.disabled);
+
     if (needsGroupBuffer) {
       const grpCanvas = document.createElement('canvas');
       grpCanvas.width = currentPsd.width;
@@ -658,14 +1044,12 @@ function drawSingleNodeRecursive(ctx, layer, parentOpacity, ignoreHidden) {
     const w = (typeof layer.right === 'number' && layer.right > x) ? (layer.right - x) : layer.canvas.width;
     const h = (typeof layer.bottom === 'number' && layer.bottom > y) ? (layer.bottom - y) : layer.canvas.height;
 
-    // Chuẩn bị hình ảnh của Layer (đã áp dụng Layer Mask & Layer Effects nếu có)
     const renderedSource = getProcessedLayerCanvas(layer, w, h);
 
     ctx.save();
     ctx.globalAlpha = Math.max(0, Math.min(1, layerOpacity));
     ctx.globalCompositeOperation = BLEND_MAP_TO_CANVAS[layer.blendMode] || 'source-over';
 
-    // Áp dụng Drop Shadow / Outer Glow trực tiếp từ layer.effects nếu được kích hoạt
     const fx = layer.effects;
     if (fx && !fx.disabled) {
       if (fx.dropShadow && fx.dropShadow.length > 0) {
@@ -696,7 +1080,6 @@ function drawSingleNodeRecursive(ctx, layer, parentOpacity, ignoreHidden) {
   }
 }
 
-// Xử lý Layer Mask, Color Overlay (solidFill) và Stroke (viền) cho từng Layer
 function getProcessedLayerCanvas(layer, w, h) {
   const hasMask = layer.mask && layer.mask.canvas && !layer.mask.disabled;
   const fx = (layer.effects && !layer.effects.disabled) ? layer.effects : null;
@@ -715,19 +1098,16 @@ function getProcessedLayerCanvas(layer, w, h) {
   out.height = h + pad * 2;
   const octx = out.getContext('2d');
 
-  // 1. Vẽ ảnh gốc của layer
   const baseTemp = document.createElement('canvas');
   baseTemp.width = w;
   baseTemp.height = h;
   const bctx = baseTemp.getContext('2d');
   bctx.drawImage(layer.canvas, 0, 0, w, h);
 
-  // 2. Nếu có Layer Mask thì cắt theo mặt nạ Luminance/Alpha
   if (hasMask) {
     applyMaskToLayerCanvas(baseTemp, layer.left || 0, layer.top || 0, layer.mask);
   }
 
-  // 3. Nếu có Color Overlay (solidFill trong Layer Effects)
   if (activeSolidFill && activeSolidFill.color) {
     const fillTemp = document.createElement('canvas');
     fillTemp.width = w;
@@ -744,7 +1124,6 @@ function getProcessedLayerCanvas(layer, w, h) {
     bctx.restore();
   }
 
-  // 4. Nếu có hiệu ứng Stroke (Viền layer trong Layer Effects) VÀ người dùng đã chỉnh sửa chữ/ảnh hoặc bật Stroke
   if (strokeSize > 0 && activeStroke.color) {
     const strokeTint = document.createElement('canvas');
     strokeTint.width = w;
@@ -768,7 +1147,6 @@ function getProcessedLayerCanvas(layer, w, h) {
   return { canvas: out, pad };
 }
 
-// Chuyển đổi mặt nạ Grayscale của Photoshop thành kênh Alpha chuẩn để cắt Layer
 function applyMaskToLayerCanvas(layerCanvas, layerLeft, layerTop, mask) {
   if (!mask || !mask.canvas) return;
   const w = layerCanvas.width;
@@ -785,7 +1163,6 @@ function applyMaskToLayerCanvas(layerCanvas, layerLeft, layerTop, mask) {
   fullMask.height = h;
   const fmCtx = fullMask.getContext('2d');
 
-  // Nếu defaultColor === 255 (mặc định trắng = hiện ngoài vùng mask)
   if (mask.defaultColor === 255) {
     fmCtx.fillStyle = 'rgba(0,0,0,1)';
     fmCtx.fillRect(0, 0, w, h);
@@ -815,7 +1192,6 @@ function getMaskAlphaCanvas(mask) {
   try {
     const imgData = ctx.getImageData(0, 0, out.width, out.height);
     const d = imgData.data;
-    // Trong Photoshop, Layer Mask lưu giá trị độ sáng (R=G=B) quy định độ đục (255 = hiện, 0 = ẩn)
     for (let i = 0; i < d.length; i += 4) {
       d[i + 3] = Math.round((d[i] * d[i + 3]) / 255);
     }
@@ -852,7 +1228,7 @@ function hexToPsdColor(hex) {
 }
 
 // ============================================================================
-// TƯƠNG TÁC CHUỘT & CẢM ỨNG ĐA ĐIỂM (TOUCH / PINCH-TO-ZOOM CHO TABLET & MOBILE)
+// TƯƠNG TÁC CHUỘT, DOUBLE-CLICK SỬA CHỮ TRỰC TIẾP & CẢM ỨNG ĐA ĐIỂM
 // ============================================================================
 function initCanvasInteractions() {
   const viewport = document.getElementById('canvasViewport');
@@ -864,10 +1240,20 @@ function initCanvasInteractions() {
     zoomBy(factor);
   }, { passive: false });
 
-  // Chuột trên máy tính
   viewport.addEventListener('mousedown', (e) => {
     if (!currentPsd) return;
+    if (e.target.closest('#inlineTextEditorModal')) return;
     startPointerInteraction(e.clientX, e.clientY);
+  });
+
+  // Nhấp đúp chuột (Double-click) trực tiếp trên vùng ảnh để mở hộp Sửa Chữ ngay lập tức!
+  viewport.addEventListener('dblclick', (e) => {
+    if (!currentPsd) return;
+    if (e.target.closest('#inlineTextEditorModal')) return;
+    const sel = findLayerById(selectedLayerId);
+    if (sel && !sel.children) {
+      openInlineTextEditor();
+    }
   });
 
   window.addEventListener('mousemove', (e) => {
@@ -879,9 +1265,9 @@ function initCanvasInteractions() {
     endPointerInteraction();
   });
 
-  // Cảm ứng trên Điện thoại & Tablet (1 ngón chọn/kéo, 2 ngón Pinch-to-Zoom)
   viewport.addEventListener('touchstart', (e) => {
     if (!currentPsd) return;
+    if (e.target.closest('#inlineTextEditorModal')) return;
     if (e.touches.length === 2) {
       isDraggingCanvas = false;
       lastPinchDist = getTouchDistance(e.touches[0], e.touches[1]);
@@ -892,6 +1278,7 @@ function initCanvasInteractions() {
 
   viewport.addEventListener('touchmove', (e) => {
     if (!currentPsd) return;
+    if (e.target.closest('#inlineTextEditorModal')) return;
     e.preventDefault();
     if (e.touches.length === 2) {
       const dist = getTouchDistance(e.touches[0], e.touches[1]);
@@ -912,9 +1299,7 @@ function initCanvasInteractions() {
 }
 
 function getTouchDistance(t1, t2) {
-  const dx = t1.clientX - t2.clientX;
-  const dy = t1.clientY - t2.clientY;
-  return Math.hypot(dx, dy);
+  return Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
 }
 
 function startPointerInteraction(clientX, clientY) {
@@ -933,14 +1318,15 @@ function startPointerInteraction(clientX, clientY) {
     const picked = pickTopmostVisibleLayerAt(docX, docY);
     if (picked && picked._uid !== selectedLayerId) {
       selectLayer(picked._uid);
-      setStatus(`Đã chọn Layer "${picked.name}" tại (${Math.round(docX)}, ${Math.round(docY)}).`);
+      setStatus(`Đã chọn Layer "${picked.name}" tại (${Math.round(docX)}, ${Math.round(docY)}). Nhấp đúp để sửa chữ trực tiếp.`);
     }
   }
 
   const moveLayerMode = document.getElementById('chkMoveLayerMode').checked;
   const selLayer = findLayerById(selectedLayerId);
-  if (moveLayerMode && selLayer && !selLayer.children) {
-    pushUndoState(`Di chuyển Layer "${selLayer.name}"`);
+  if (moveLayerMode && selLayer) {
+    pushUndoState(`Di chuyển "${selLayer.name}"`);
+    if (selLayer.children) computeGroupBounds(selLayer);
     layerStartLeft = selLayer.left || 0;
     layerStartTop = selLayer.top || 0;
   } else {
@@ -955,17 +1341,26 @@ function movePointerInteraction(clientX, clientY) {
   const moveLayerMode = document.getElementById('chkMoveLayerMode').checked;
   const selLayer = findLayerById(selectedLayerId);
 
-  if (moveLayerMode && selLayer && !selLayer.children) {
-    const w = (selLayer.right || 0) - (selLayer.left || 0);
-    const h = (selLayer.bottom || 0) - (selLayer.top || 0);
+  if (moveLayerMode && selLayer) {
     const newLeft = Math.round(layerStartLeft + dx / zoomLevel);
     const newTop = Math.round(layerStartTop + dy / zoomLevel);
-    selLayer.left = newLeft;
-    selLayer.top = newTop;
-    selLayer.right = newLeft + w;
-    selLayer.bottom = newTop + h;
-    document.getElementById('inpLayerLeft').value = newLeft;
-    document.getElementById('inpLayerTop').value = newTop;
+    const stepX = newLeft - (selLayer.left || 0);
+    const stepY = newTop - (selLayer.top || 0);
+
+    if (selLayer.children) {
+      offsetGroupChildrenRecursive(selLayer.children, stepX, stepY);
+      computeGroupBounds(selLayer);
+    } else {
+      const w = (selLayer.right || 0) - (selLayer.left || 0);
+      const h = (selLayer.bottom || 0) - (selLayer.top || 0);
+      selLayer.left = newLeft;
+      selLayer.top = newTop;
+      selLayer.right = newLeft + w;
+      selLayer.bottom = newTop + h;
+    }
+
+    document.getElementById('inpLayerLeft').value = selLayer.left || 0;
+    document.getElementById('inpLayerTop').value = selLayer.top || 0;
     renderComposite();
   } else {
     panX += dx;
@@ -973,6 +1368,27 @@ function movePointerInteraction(clientX, clientY) {
     dragStartX = clientX;
     dragStartY = clientY;
     applyViewportTransform();
+  }
+}
+
+function offsetGroupChildrenRecursive(children, dx, dy) {
+  if (!children) return;
+  for (const child of children) {
+    if (child.children) {
+      offsetGroupChildrenRecursive(child.children, dx, dy);
+      computeGroupBounds(child);
+    } else {
+      child.left = (child.left || 0) + dx;
+      child.top = (child.top || 0) + dy;
+      child.right = (child.right || 0) + dx;
+      child.bottom = (child.bottom || 0) + dy;
+      if (child.mask) {
+        child.mask.left = (child.mask.left || 0) + dx;
+        child.mask.top = (child.mask.top || 0) + dy;
+        child.mask.right = (child.mask.right || 0) + dx;
+        child.mask.bottom = (child.mask.bottom || 0) + dy;
+      }
+    }
   }
 }
 
@@ -1022,8 +1438,17 @@ function isLayerEffectivelyVisible(layer) {
   return true;
 }
 
+function isLayerHiddenByCollapsedAncestor(layer) {
+  let cur = layer._parent;
+  while (cur && cur !== currentPsd) {
+    if (cur._collapsed) return true;
+    cur = cur._parent;
+  }
+  return false;
+}
+
 // ============================================================================
-// CẬP NHẬT THÔNG TIN TÀI LIỆU & DANH SÁCH CÂY LAYER
+// CẬP NHẬT THÔNG TIN TÀI LIỆU & DANH SÁCH CÂY LAYER (ĐẦY ĐỦ THƯ MỤC GROUP)
 // ============================================================================
 function getLayerKind(layer) {
   if (layer.children) return 'group';
@@ -1035,11 +1460,11 @@ function getLayerKind(layer) {
 
 function getLayerBadgeInfo(kind) {
   switch (kind) {
-    case 'group': return { label: 'Group', cls: 'badge-group', icon: '📁' };
+    case 'group': return { label: 'Thư mục (Group)', cls: 'badge-group', icon: '📁' };
     case 'smart': return { label: 'Smart Object', cls: 'badge-smart', icon: '📦' };
-    case 'text':  return { label: 'Text', cls: 'badge-text', icon: '🔤' };
+    case 'text':  return { label: 'Chữ (Text)', cls: 'badge-text', icon: '🔤' };
     case 'shape': return { label: 'Shape/Vector', cls: 'badge-shape', icon: '✒️' };
-    default:      return { label: 'Pixel', cls: 'badge-pixel', icon: '🖼️' };
+    default:      return { label: 'Ảnh (Pixel)', cls: 'badge-pixel', icon: '🖼️' };
   }
 }
 
@@ -1065,8 +1490,11 @@ function rebuildFlatLayers() {
       item._parent = parentNode;
       item._depth = depth;
       flatLayers.push(item);
-      if (item.children && item.children.length > 0) {
-        traverseTopDown(item.children, item, depth + 1);
+      if (item.children) {
+        computeGroupBounds(item);
+        if (item.children.length > 0) {
+          traverseTopDown(item.children, item, depth + 1);
+        }
       }
     }
   }
@@ -1111,7 +1539,15 @@ function updateDocumentSummaryUI(fileName, fileSize) {
 
   document.getElementById('docLayerStats').innerHTML =
     `Tổng: <strong>${flatLayers.length}</strong> mục ` +
-    `(${pixels} Ảnh, ${smarts} Smart Object, ${texts} Chữ, ${shapes} Vector, ${groups} Group, ${fxCount} có Hiệu ứng FX, ${hidden} đang ẩn)`;
+    `(${groups} Thư mục Group, ${pixels} Ảnh, ${smarts} Smart Object, ${texts} Chữ, ${shapes} Vector, ${fxCount} có FX, ${hidden} đang ẩn)`;
+}
+
+function toggleAllGroupsCollapsed(collapsed) {
+  if (!currentPsd) return;
+  for (const l of flatLayers) {
+    if (l.children) l._collapsed = collapsed;
+  }
+  renderLayerTree();
 }
 
 function renderLayerTree() {
@@ -1120,10 +1556,16 @@ function renderLayerTree() {
 
   const keyword = (document.getElementById('searchLayerInput').value || '').trim().toLowerCase();
   const filterType = document.getElementById('filterLayerType').value;
+  const isFiltering = Boolean(keyword || filterType !== 'all');
 
   container.innerHTML = '';
 
   for (const layer of flatLayers) {
+    // Ẩn các layer con nếu Thư mục cha đang được thu gọn (_collapsed = true), trừ khi đang tìm kiếm/lọc
+    if (!isFiltering && isLayerHiddenByCollapsedAncestor(layer)) {
+      continue;
+    }
+
     const kind = getLayerKind(layer);
     const badge = getLayerBadgeInfo(kind);
     const nameStr = layer.name || '(Không tên)';
@@ -1135,17 +1577,43 @@ function renderLayerTree() {
     }
 
     const row = document.createElement('div');
-    row.className = 'layer-item' + (layer._uid === selectedLayerId ? ' active' : '');
-    row.style.paddingLeft = `${8 + layer._depth * 14}px`;
+    row.className = 'layer-item' +
+      (layer.children ? ' is-group' : '') +
+      (layer._uid === selectedLayerId ? ' active' : '');
+    row.style.paddingLeft = `${6 + layer._depth * 14}px`;
     row.onclick = () => selectLayer(layer._uid);
+    row.ondblclick = (e) => {
+      e.stopPropagation();
+      selectLayer(layer._uid);
+      if (layer.children) {
+        layer._collapsed = !layer._collapsed;
+        renderLayerTree();
+      } else {
+        openInlineTextEditor();
+      }
+    };
+
+    // Nếu là Thư mục (Group), hiển thị nút mở rộng / thu gọn (▼ / ▶)
+    if (layer.children) {
+      const foldBtn = document.createElement('button');
+      foldBtn.className = 'folder-toggle-btn';
+      foldBtn.textContent = layer._collapsed ? '▶' : '▼';
+      foldBtn.title = layer._collapsed ? 'Mở rộng thư mục này' : 'Thu gọn thư mục này';
+      foldBtn.onclick = (e) => {
+        e.stopPropagation();
+        layer._collapsed = !layer._collapsed;
+        renderLayerTree();
+      };
+      row.appendChild(foldBtn);
+    }
 
     const visBtn = document.createElement('button');
     visBtn.className = 'layer-vis-btn' + (layer.hidden ? ' hidden-layer' : '');
     visBtn.innerHTML = layer.hidden ? '🚫' : '👁';
-    visBtn.title = layer.hidden ? 'Bật hiển thị Layer này' : 'Ẩn Layer này';
+    visBtn.title = layer.hidden ? 'Bật hiển thị' : 'Ẩn mục này';
     visBtn.onclick = (e) => {
       e.stopPropagation();
-      pushUndoState(`Ẩn/Hiện Layer "${layer.name}"`);
+      pushUndoState(`Ẩn/Hiện "${layer.name}"`);
       layer.hidden = !layer.hidden;
       renderLayerTree();
       renderComposite();
@@ -1163,6 +1631,8 @@ function renderLayerTree() {
       } catch (err) {
         thumb.textContent = badge.icon;
       }
+    } else if (layer.children) {
+      thumb.textContent = layer._collapsed ? '📁' : '📂';
     } else {
       thumb.textContent = badge.icon;
     }
@@ -1185,9 +1655,9 @@ function renderLayerTree() {
     const meta = document.createElement('div');
     meta.className = 'layer-meta';
     meta.innerHTML = `
-      <span class="badge ${badge.cls}">${badge.label}</span>
-      ${hasFx ? '<span class="badge badge-fx" title="Layer có Hiệu ứng (Layer Style / Effects)">fx</span>' : ''}
-      ${hasMask ? '<span class="badge badge-pixel" title="Layer có Mặt nạ (Layer Mask)">🎭Mask</span>' : ''}
+      <span class="badge ${badge.cls}">${layer.children ? `Thư mục (${layer.children.length})` : badge.label}</span>
+      ${hasFx ? '<span class="badge badge-fx" title="Layer có Hiệu ứng FX">fx</span>' : ''}
+      ${hasMask ? '<span class="badge badge-pixel" title="Có Layer Mask">🎭Mask</span>' : ''}
       ${layer.clipping ? '<span class="badge badge-smart" title="Clipping Mask">⤵Clip</span>' : ''}
       <span>${w > 0 ? `${w}×${h}` : ''}</span>
       <span>${opPct}%</span>
@@ -1212,7 +1682,7 @@ function createSmallThumbDataUrl(sourceCanvas) {
 }
 
 // ============================================================================
-// CHỌN LAYER, CHỈNH SỬA FONT TEXT, LAYER EFFECTS, THAY ẢNH & XÓA LAYER
+// CHỌN LAYER HOẶC THƯ MỤC (GROUP) — XEM & SỬA TRỰC TIẾP MỌI THƯ MỤC VÀ TEXT
 // ============================================================================
 function findLayerById(uid) {
   return flatLayers.find(l => l._uid === uid) || null;
@@ -1220,7 +1690,7 @@ function findLayerById(uid) {
 
 function extractTextPropertiesFromPsdLayer(layer) {
   const result = {
-    text: (layer.text && layer.text.text) ? layer.text.text : '',
+    text: (layer.text && typeof layer.text.text === 'string') ? layer.text.text : (layer.name || ''),
     fontName: 'Be Vietnam Pro',
     originalPsdFont: '',
     fontSize: 48,
@@ -1228,14 +1698,18 @@ function extractTextPropertiesFromPsdLayer(layer) {
     strokeColor: '#000000',
     strokeWidth: 0
   };
-  if (!layer.text) return result;
+  if (!layer.text) {
+    // Nếu là Layer chữ đã bị Outline/Rasterize, ước lượng cỡ chữ từ chiều cao của Layer
+    const h = Math.max(24, (layer.bottom || 0) - (layer.top || 0));
+    result.fontSize = Math.max(14, Math.min(300, Math.round(h * 0.72)));
+    return result;
+  }
 
   const st = layer.text.style || (layer.text.styleRuns && layer.text.styleRuns[0] && layer.text.styleRuns[0].style) || {};
   if (st.font && st.font.name) {
     result.originalPsdFont = st.font.name;
   }
 
-  // Tính cỡ chữ thực tế sau khi nhân ma trận biến đổi (transform) của Text Layer trong PSD
   let rawSize = st.fontSize || 48;
   if (layer.text.transform && layer.text.transform.length >= 4) {
     const scaleY = Math.hypot(layer.text.transform[2], layer.text.transform[3]);
@@ -1265,11 +1739,14 @@ function selectLayer(uid) {
   }
 
   card.style.display = 'block';
+  const isGroup = Boolean(layer.children);
   const kind = getLayerKind(layer);
   const badge = getLayerBadgeInfo(kind);
   const badgeEl = document.getElementById('selLayerTypeBadge');
   badgeEl.className = `badge ${badge.cls}`;
   badgeEl.textContent = badge.label;
+
+  if (isGroup) computeGroupBounds(layer);
 
   document.getElementById('inpLayerName').value = layer.name || '';
   document.getElementById('inpLayerOpacity').value = Math.round((typeof layer.opacity === 'number' ? layer.opacity : 1) * 100);
@@ -1286,38 +1763,59 @@ function selectLayer(uid) {
   document.getElementById('inpLayerWidth').value = width;
   document.getElementById('inpLayerHeight').value = height;
 
-  // Xem trước riêng Layer
+  // Xem trước hình ảnh riêng của Layer HOẶC của cả Thư mục (Group)!
   const previewBox = document.getElementById('selLayerPreviewBox');
   previewBox.innerHTML = '';
-  if (layer.canvas && layer.canvas.width > 0 && layer.canvas.height > 0) {
+  if (isGroup) {
+    const grpCanvas = renderGroupPreviewCanvas(layer);
+    layer._groupPreviewCanvas = grpCanvas;
+    if (grpCanvas) {
+      const img = document.createElement('img');
+      img.src = grpCanvas.toDataURL();
+      previewBox.appendChild(img);
+    } else {
+      previewBox.innerHTML = `<span style="font-size:12px; color:#d97706; font-weight:600;">📁 Thư mục (${layer.children.length} mục con)</span>`;
+    }
+  } else if (layer.canvas && layer.canvas.width > 0 && layer.canvas.height > 0) {
     const img = document.createElement('img');
     img.src = layer.canvas.toDataURL();
     previewBox.appendChild(img);
-  } else if (layer.children) {
-    previewBox.innerHTML = `<span style="font-size:12px; color:#d97706; font-weight:600;">📁 Nhóm chứa ${layer.children.length} layer con</span>`;
   } else {
     previewBox.innerHTML = `<span style="font-size:12px; color:var(--text-secondary)">Layer không chứa ảnh điểm riêng</span>`;
   }
 
-  // Bảng chỉnh sửa Text & Font
+  // Hiển thị hộp công cụ dành riêng cho Thư mục (Group)
+  const groupToolsBox = document.getElementById('groupActionsBox');
+  if (groupToolsBox) {
+    groupToolsBox.style.display = isGroup ? 'block' : 'none';
+    if (isGroup) {
+      document.getElementById('groupChildCountLabel').textContent =
+        `Thư mục "${layer.name}" đang chứa ${layer.children.length} mục trực tiếp. Bạn có thể di chuyển, co giãn, gộp hoặc thêm Layer mới vào thẳng trong thư mục này.`;
+    }
+  }
+
+  // Hiển thị bảng Sửa Chữ trực tiếp cho MỌI Layer đơn (bao gồm cả Text Layer chuẩn và Layer chữ đã bị Outline/Rasterize!)
   const textEditBox = document.getElementById('textEditBox');
-  if (layer.text && typeof layer.text.text === 'string') {
+  if (!isGroup) {
     textEditBox.style.display = 'block';
     const tp = extractTextPropertiesFromPsdLayer(layer);
     document.getElementById('inpLayerText').value = tp.text;
     document.getElementById('inpTextSize').value = tp.fontSize;
     document.getElementById('inpTextColor').value = tp.fillColor;
-    document.getElementById('origPsdFontLabel').textContent = tp.originalPsdFont
-      ? `Font gốc trong PSD: "${tp.originalPsdFont}" (Đang giữ nguyên ảnh chữ gốc chuẩn Photoshop cho đến khi bạn bấm Cập nhật)`
-      : `Đang giữ nguyên ảnh chữ gốc từ Photoshop`;
+    if (layer.text) {
+      document.getElementById('origPsdFontLabel').textContent = tp.originalPsdFont
+        ? `Font gốc trong PSD: "${tp.originalPsdFont}" — Gõ vào ô dưới để sửa chữ trực tiếp theo thời gian thực!`
+        : `Text Layer — Gõ vào ô dưới để sửa chữ trực tiếp!`;
+    } else {
+      document.getElementById('origPsdFontLabel').textContent =
+        `💡 Layer này đang là Ảnh / Outline Text. Bạn vẫn có thể gõ nội dung chữ mới vào ô dưới để thay thế thành chữ trực tiếp!`;
+    }
   } else {
     textEditBox.style.display = 'none';
   }
 
-  // Bảng chỉnh sửa Hiệu ứng Layer (Layer Effects: Drop Shadow & Stroke)
   populateEffectsUI(layer);
 
-  // Thông tin Smart Object
   const smartBox = document.getElementById('smartObjectInfoBox');
   if (layer.placedLayer) {
     smartBox.style.display = 'block';
@@ -1337,6 +1835,49 @@ function selectLayer(uid) {
     renderComposite();
   } else {
     updateSelectionBox();
+  }
+}
+
+// ============================================================================
+// HỘP SỬA CHỮ NỔI TRỰC TIẾP TRÊN MÀN HÌNH CANVAS (INLINE ON-CANVAS TEXT EDITOR)
+// ============================================================================
+function openInlineTextEditor() {
+  const layer = findLayerById(selectedLayerId);
+  if (!layer || layer.children) {
+    alert('Vui lòng chọn một Layer chữ hoặc Layer hình ảnh để sửa nội dung chữ.');
+    return;
+  }
+  const tp = extractTextPropertiesFromPsdLayer(layer);
+  document.getElementById('inlineTextInput').value = tp.text;
+  document.getElementById('inlineTextSize').value = tp.fontSize;
+  document.getElementById('inlineTextColor').value = tp.fillColor;
+  const modal = document.getElementById('inlineTextEditorModal');
+  modal.classList.add('open');
+  const ta = document.getElementById('inlineTextInput');
+  ta.focus();
+  ta.select();
+}
+
+function closeInlineTextEditor() {
+  const modal = document.getElementById('inlineTextEditorModal');
+  if (modal) modal.classList.remove('open');
+}
+
+function onInlineTextLiveChange() {
+  const layer = findLayerById(selectedLayerId);
+  if (!layer || layer.children) return;
+  document.getElementById('inpLayerText').value = document.getElementById('inlineTextInput').value;
+  document.getElementById('inpTextFont').value = document.getElementById('inlineTextFont').value;
+  document.getElementById('inpTextSize').value = document.getElementById('inlineTextSize').value;
+  document.getElementById('inpTextColor').value = document.getElementById('inlineTextColor').value;
+  applyTextToSelectedLayer(true);
+}
+
+// Hỗ trợ gõ chữ tới đâu cập nhật trực tiếp lên bản Preview tới đó (Live Text Editing)
+function onLeftPanelTextLiveInput() {
+  const autoLive = document.getElementById('chkLiveTextUpdate');
+  if (autoLive && autoLive.checked) {
+    applyTextToSelectedLayer(true);
   }
 }
 
@@ -1392,11 +1933,10 @@ function updateSelectedLayerEffects() {
   renderComposite();
 }
 
-// Khôi phục hoàn toàn Bitmap gốc & Hiệu ứng gốc từ file PSD cho Layer đang chọn
 function restoreOriginalLayerFromPsd() {
   const layer = findLayerById(selectedLayerId);
   if (!layer || !layer._originalPsdCanvas) {
-    alert('Layer này không có bản sao gốc hoặc chưa từng bị thay đổi.');
+    alert('Mục này là Thư mục hoặc chưa từng bị thay đổi so với gốc PSD.');
     return;
   }
   pushUndoState(`Khôi phục gốc Layer "${layer.name}"`);
@@ -1422,10 +1962,12 @@ function updateSelectionBox() {
   const show = document.getElementById('chkShowBounds').checked;
   const layer = findLayerById(selectedLayerId);
 
-  if (!show || !layer || layer.children) {
+  if (!show || !layer) {
     box.style.display = 'none';
     return;
   }
+
+  if (layer.children) computeGroupBounds(layer);
 
   const left = layer.left || 0;
   const top = layer.top || 0;
@@ -1438,11 +1980,13 @@ function updateSelectionBox() {
   }
 
   box.style.display = 'block';
+  box.classList.toggle('group-selection', Boolean(layer.children));
   box.style.left = `${left}px`;
   box.style.top = `${top}px`;
   box.style.width = `${w}px`;
   box.style.height = `${h}px`;
-  document.getElementById('selectionLabel').textContent = `${layer.name || 'Layer'} (${w}×${h})`;
+  const prefix = layer.children ? '📁 Thư mục: ' : '';
+  document.getElementById('selectionLabel').textContent = `${prefix}${layer.name || 'Layer'} (${w}×${h})`;
 }
 
 function updateSelectedLayerProps() {
@@ -1461,32 +2005,57 @@ function updateSelectedLayerProps() {
   renderComposite();
 }
 
+// Hỗ trợ di chuyển cả Layer đơn LẪN cả Thư mục (Group) khi nhập tọa độ X, Y
 function updateSelectedLayerPosition() {
   const layer = findLayerById(selectedLayerId);
   if (!layer) return;
-  pushUndoState(`Đổi tọa độ Layer "${layer.name}"`);
+  pushUndoState(`Đổi tọa độ "${layer.name}"`);
 
-  const oldW = (layer.right || 0) - (layer.left || 0);
-  const oldH = (layer.bottom || 0) - (layer.top || 0);
+  if (layer.children) computeGroupBounds(layer);
+  const oldLeft = layer.left || 0;
+  const oldTop = layer.top || 0;
   const newLeft = parseInt(document.getElementById('inpLayerLeft').value, 10) || 0;
   const newTop = parseInt(document.getElementById('inpLayerTop').value, 10) || 0;
+  const dx = newLeft - oldLeft;
+  const dy = newTop - oldTop;
 
-  layer.left = newLeft;
-  layer.top = newTop;
-  layer.right = newLeft + oldW;
-  layer.bottom = newTop + oldH;
+  if (layer.children) {
+    offsetGroupChildrenRecursive(layer.children, dx, dy);
+    computeGroupBounds(layer);
+  } else {
+    const oldW = (layer.right || 0) - oldLeft;
+    const oldH = (layer.bottom || 0) - oldTop;
+    layer.left = newLeft;
+    layer.top = newTop;
+    layer.right = newLeft + oldW;
+    layer.bottom = newTop + oldH;
+  }
 
   renderComposite();
 }
 
+// Hỗ trợ co giãn kích thước (Resize) cho cả Layer đơn LẪN cả Thư mục (Group)!
 function resizeSelectedLayer() {
   const layer = findLayerById(selectedLayerId);
-  if (!layer || !layer.canvas) return;
-  pushUndoState(`Đổi kích thước Layer "${layer.name}"`);
+  if (!layer) return;
+  pushUndoState(`Đổi kích thước "${layer.name}"`);
 
   const newW = Math.max(1, parseInt(document.getElementById('inpLayerWidth').value, 10) || 1);
   const newH = Math.max(1, parseInt(document.getElementById('inpLayerHeight').value, 10) || 1);
 
+  if (layer.children) {
+    const b = computeGroupBounds(layer);
+    if (b.width <= 0 || b.height <= 0) return;
+    const scaleX = newW / b.width;
+    const scaleY = newH / b.height;
+    scaleGroupChildrenRecursive(layer.children, b.left, b.top, scaleX, scaleY);
+    computeGroupBounds(layer);
+    selectLayer(layer._uid);
+    renderComposite();
+    return;
+  }
+
+  if (!layer.canvas) return;
   const newCanvas = document.createElement('canvas');
   newCanvas.width = newW;
   newCanvas.height = newH;
@@ -1500,53 +2069,170 @@ function resizeSelectedLayer() {
   renderComposite();
 }
 
-function duplicateSelectedLayer() {
+function scaleGroupChildrenRecursive(children, originX, originY, scaleX, scaleY) {
+  if (!children) return;
+  for (const child of children) {
+    if (child.children) {
+      scaleGroupChildrenRecursive(child.children, originX, originY, scaleX, scaleY);
+      computeGroupBounds(child);
+    } else if (child.canvas) {
+      const oldL = child.left || 0;
+      const oldT = child.top || 0;
+      const oldW = Math.max(1, (child.right || 0) - oldL);
+      const oldH = Math.max(1, (child.bottom || 0) - oldT);
+      const newL = Math.round(originX + (oldL - originX) * scaleX);
+      const newT = Math.round(originY + (oldT - originY) * scaleY);
+      const newW = Math.max(1, Math.round(oldW * scaleX));
+      const newH = Math.max(1, Math.round(oldH * scaleY));
+
+      const sc = document.createElement('canvas');
+      sc.width = newW;
+      sc.height = newH;
+      sc.getContext('2d').drawImage(child.canvas, 0, 0, newW, newH);
+      child.canvas = sc;
+      child.left = newL;
+      child.top = newT;
+      child.right = newL + newW;
+      child.bottom = newT + newH;
+    }
+  }
+}
+
+// ============================================================================
+// CÁC THAO TÁC CHUYÊN SÂU TRÊN THƯ MỤC (GROUP) & LAYER
+// ============================================================================
+function addNewGroupFolder() {
+  if (!currentPsd) return;
+  const groupName = prompt('Nhập tên Thư mục (Group) mới:', 'Thư mục mới');
+  if (!groupName) return;
+  pushUndoState(`Tạo thư mục "${groupName}"`);
+
+  const newGrp = {
+    _uid: nextUid++,
+    name: groupName,
+    opacity: 1,
+    blendMode: 'normal',
+    hidden: false,
+    opened: true,
+    _collapsed: false,
+    children: []
+  };
+
+  insertNodeIntoActiveTarget(newGrp);
+  updateDocumentSummaryUI(currentFileName, currentFileSize);
+  selectLayer(newGrp._uid);
+  renderLayerTree();
+  renderComposite();
+  setStatus(`Đã tạo Thư mục mới "${groupName}".`);
+}
+
+// Gộp toàn bộ một Thư mục (Group) thành 1 Layer hình ảnh duy nhất (Merge Group)
+function mergeSelectedGroupToLayer() {
   const layer = findLayerById(selectedLayerId);
-  if (!layer || layer.children) {
-    alert('Vui lòng chọn một Layer hình ảnh/văn bản để nhân bản.');
+  if (!layer || !layer.children) {
+    alert('Vui lòng chọn một Thư mục (Group) để gộp thành Layer ảnh.');
     return;
   }
-  pushUndoState(`Nhân bản Layer "${layer.name}"`);
+  const grpCanvas = renderGroupPreviewCanvas(layer);
+  if (!grpCanvas) {
+    alert('Thư mục này đang trống hoặc không có hình ảnh hiển thị để gộp.');
+    return;
+  }
+  pushUndoState(`Gộp thư mục "${layer.name}" thành Layer`);
+  const b = computeGroupBounds(layer);
+  delete layer.children;
+  layer.canvas = grpCanvas;
+  layer.left = b.left;
+  layer.top = b.top;
+  layer.right = b.right;
+  layer.bottom = b.bottom;
+
+  updateDocumentSummaryUI(currentFileName, currentFileSize);
+  selectLayer(layer._uid);
+  renderLayerTree();
+  renderComposite();
+  setStatus(`Đã gộp Thư mục "${layer.name}" thành 1 Layer hình ảnh (${b.width}×${b.height} px).`);
+}
+
+function deepCloneLayerNode(node, parentRef, depth) {
+  let clonedCanvas = null;
+  if (node.canvas) {
+    clonedCanvas = document.createElement('canvas');
+    clonedCanvas.width = node.canvas.width;
+    clonedCanvas.height = node.canvas.height;
+    clonedCanvas.getContext('2d').drawImage(node.canvas, 0, 0);
+  }
+  const copy = {
+    _uid: nextUid++,
+    name: node.name,
+    left: (node.left || 0) + 16,
+    top: (node.top || 0) + 16,
+    right: (node.right || 0) + 16,
+    bottom: (node.bottom || 0) + 16,
+    opacity: node.opacity,
+    blendMode: node.blendMode,
+    hidden: node.hidden,
+    clipping: node.clipping,
+    canvas: clonedCanvas,
+    effects: node.effects ? JSON.parse(JSON.stringify(node.effects)) : undefined,
+    text: node.text ? JSON.parse(JSON.stringify(node.text)) : undefined,
+    _depth: depth,
+    _parent: parentRef
+  };
+  if (node.children) {
+    copy._collapsed = false;
+    copy.children = node.children.map(ch => deepCloneLayerNode(ch, copy, depth + 1));
+    computeGroupBounds(copy);
+  }
+  return copy;
+}
+
+// Nhân bản được cả Layer đơn LẪN cả Thư mục (Group)!
+function duplicateSelectedLayer() {
+  const layer = findLayerById(selectedLayerId);
+  if (!layer) return;
+
+  pushUndoState(`Nhân bản "${layer.name}"`);
   const parentList = (layer._parent && layer._parent.children) ? layer._parent.children : currentPsd.children;
   const idx = parentList.indexOf(layer);
   if (idx === -1) return;
 
-  let clonedCanvas = null;
-  if (layer.canvas) {
-    clonedCanvas = document.createElement('canvas');
-    clonedCanvas.width = layer.canvas.width;
-    clonedCanvas.height = layer.canvas.height;
-    clonedCanvas.getContext('2d').drawImage(layer.canvas, 0, 0);
-  }
-
-  const copy = {
-    _uid: nextUid++,
-    name: (layer.name || 'Layer') + ' (Bản sao)',
-    left: (layer.left || 0) + 20,
-    top: (layer.top || 0) + 20,
-    right: (layer.right || 0) + 20,
-    bottom: (layer.bottom || 0) + 20,
-    opacity: layer.opacity,
-    blendMode: layer.blendMode,
-    hidden: false,
-    canvas: clonedCanvas,
-    effects: layer.effects ? JSON.parse(JSON.stringify(layer.effects)) : undefined,
-    text: layer.text ? JSON.parse(JSON.stringify(layer.text)) : undefined,
-    _depth: layer._depth,
-    _parent: layer._parent
-  };
+  const copy = deepCloneLayerNode(layer, layer._parent, layer._depth);
+  copy.name = (layer.name || 'Layer') + ' (Bản sao)';
 
   parentList.splice(idx + 1, 0, copy);
   updateDocumentSummaryUI(currentFileName, currentFileSize);
   selectLayer(copy._uid);
   renderLayerTree();
   renderComposite();
-  setStatus(`Đã nhân bản Layer "${layer.name}".`);
+  setStatus(`Đã nhân bản "${layer.name}".`);
+}
+
+function insertNodeIntoActiveTarget(newNode) {
+  const sel = findLayerById(selectedLayerId);
+  if (sel && sel.children) {
+    // Nếu đang chọn một Thư mục (Group), thêm thẳng vào bên trong Thư mục đó!
+    newNode._parent = sel;
+    newNode._depth = (sel._depth || 0) + 1;
+    sel._collapsed = false;
+    sel.children.push(newNode);
+  } else if (sel && sel._parent && sel._parent.children) {
+    // Thêm ngay phía trên Layer đang chọn trong cùng Thư mục
+    const list = sel._parent.children;
+    const idx = list.indexOf(sel);
+    newNode._parent = sel._parent;
+    newNode._depth = sel._depth || 0;
+    list.splice(idx + 1, 0, newNode);
+  } else {
+    newNode._parent = currentPsd;
+    newNode._depth = 0;
+    currentPsd.children.push(newNode);
+  }
 }
 
 function triggerReplaceLayerImage() {
   if (!findLayerById(selectedLayerId)) {
-    alert('Vui lòng chọn một Layer ở danh sách trước khi thay thế.');
+    alert('Vui lòng chọn một Layer hoặc Thư mục ở danh sách trước khi thay thế.');
     return;
   }
   document.getElementById('replaceImageInput').click();
@@ -1557,14 +2243,15 @@ async function handleReplaceSelectedLayerWithImage(file) {
   if (!layer) return;
 
   try {
-    pushUndoState(`Thay thế ảnh Layer "${layer.name}"`);
+    pushUndoState(`Thay thế ảnh "${layer.name}"`);
     const img = await blobToImage(file);
     const fitMode = document.getElementById('replaceFitMode').value;
 
+    if (layer.children) computeGroupBounds(layer);
     const oldLeft = layer.left || 0;
     const oldTop = layer.top || 0;
-    const oldW = Math.max(1, (layer.right || currentPsd.width) - oldLeft);
-    const oldH = Math.max(1, (layer.bottom || currentPsd.height) - oldTop);
+    const oldW = Math.max(1, (layer.right > oldLeft) ? (layer.right - oldLeft) : currentPsd.width);
+    const oldH = Math.max(1, (layer.bottom > oldTop) ? (layer.bottom - oldTop) : currentPsd.height);
 
     let targetW = oldW;
     let targetH = oldH;
@@ -1595,7 +2282,11 @@ async function handleReplaceSelectedLayerWithImage(file) {
     const ctx = newCanvas.getContext('2d');
     ctx.drawImage(img, drawX, drawY, drawW, drawH);
 
+    // Nếu thay ảnh vào một Thư mục (Group), chuyển Thư mục đó thành Layer ảnh mới
+    if (layer.children) delete layer.children;
     layer.canvas = newCanvas;
+    layer.left = oldLeft;
+    layer.top = oldTop;
     layer.right = oldLeft + targetW;
     layer.bottom = oldTop + targetH;
     layer.hidden = false;
@@ -1608,10 +2299,11 @@ async function handleReplaceSelectedLayerWithImage(file) {
       layer._linkedFile._decodedCanvas = newCanvas;
     }
 
+    updateDocumentSummaryUI(currentFileName, currentFileSize);
     selectLayer(layer._uid);
     renderLayerTree();
     renderComposite();
-    setStatus(`Đã thay thế nội dung Layer "${layer.name}" bằng ảnh "${file.name}" (${targetW}×${targetH} px).`);
+    setStatus(`Đã thay thế nội dung "${layer.name}" bằng ảnh "${file.name}" (${targetW}×${targetH} px).`);
   } catch (err) {
     alert('Không thể đọc file ảnh thay thế: ' + err.message);
   }
@@ -1640,17 +2332,15 @@ async function handleAddNewImageLayer(file) {
       opacity: 1,
       blendMode: 'normal',
       hidden: false,
-      canvas: c,
-      _depth: 0,
-      _parent: currentPsd
+      canvas: c
     };
 
-    currentPsd.children.push(newLayer);
+    insertNodeIntoActiveTarget(newLayer);
     updateDocumentSummaryUI(currentFileName, currentFileSize);
     selectLayer(newLayer._uid);
     renderLayerTree();
     renderComposite();
-    setStatus(`Đã thêm Layer mới "${newLayer.name}" (${c.width}×${c.height} px).`);
+    setStatus(`Đã thêm Layer ảnh "${newLayer.name}" (${c.width}×${c.height} px).`);
   } catch (err) {
     alert('Lỗi khi thêm ảnh: ' + err.message);
   }
@@ -1663,7 +2353,7 @@ function addNewTextLayer() {
   pushUndoState(`Thêm Layer chữ "${textContent}"`);
 
   const fontSize = Math.max(28, Math.round(currentPsd.width * 0.04));
-  const c = renderRichTextToCanvas(textContent, 'Be Vietnam Pro', fontSize, '700', '#ffffff', '#000000', 0);
+  const c = renderRichTextToCanvas(textContent, 'Be Vietnam Pro', fontSize, '700', '#ffffff', '#000000', 0, 'left');
   const left = Math.round((currentPsd.width - c.width) / 2);
   const top = Math.round((currentPsd.height - c.height) / 2);
 
@@ -1678,12 +2368,10 @@ function addNewTextLayer() {
     blendMode: 'normal',
     hidden: false,
     canvas: c,
-    text: { text: textContent },
-    _depth: 0,
-    _parent: currentPsd
+    text: { text: textContent }
   };
 
-  currentPsd.children.push(newLayer);
+  insertNodeIntoActiveTarget(newLayer);
   updateDocumentSummaryUI(currentFileName, currentFileSize);
   selectLayer(newLayer._uid);
   renderLayerTree();
@@ -1691,10 +2379,17 @@ function addNewTextLayer() {
   setStatus(`Đã thêm Layer chữ "${newLayer.name}".`);
 }
 
-function applyTextToSelectedLayer() {
+function applyTextToSelectedLayer(isLiveTyping) {
   const layer = findLayerById(selectedLayerId);
-  if (!layer) return;
-  pushUndoState(`Cập nhật chữ Layer "${layer.name}"`);
+  if (!layer || layer.children) return;
+  if (!isLiveTyping) {
+    pushUndoState(`Cập nhật chữ Layer "${layer.name}"`);
+  } else {
+    const viewModeSel = document.getElementById('selRenderMode');
+    if (viewModeSel && viewModeSel.value === 'psd_composite') {
+      viewModeSel.value = 'live_layers';
+    }
+  }
 
   const textVal = document.getElementById('inpLayerText').value || '';
   const fontFamily = document.getElementById('inpTextFont').value || 'Be Vietnam Pro';
@@ -1703,39 +2398,57 @@ function applyTextToSelectedLayer() {
   const color = document.getElementById('inpTextColor').value || '#ffffff';
   const strokeColor = document.getElementById('inpTextOutlineColor').value || '#000000';
   const strokeWidth = parseInt(document.getElementById('inpTextOutlineWidth').value, 10) || 0;
+  const textAlign = document.getElementById('inpTextAlign') ? document.getElementById('inpTextAlign').value : 'left';
 
-  const c = renderRichTextToCanvas(textVal, fontFamily, fontSize, fontWeight, color, strokeColor, strokeWidth);
+  const c = renderRichTextToCanvas(textVal, fontFamily, fontSize, fontWeight, color, strokeColor, strokeWidth, textAlign);
   layer.canvas = c;
   layer.right = (layer.left || 0) + c.width;
   layer.bottom = (layer.top || 0) + c.height;
   layer.name = textVal.split('\n')[0].slice(0, 32) || layer.name;
+  document.getElementById('inpLayerName').value = layer.name;
+  document.getElementById('inpLayerWidth').value = c.width;
+  document.getElementById('inpLayerHeight').value = c.height;
+
   if (!layer.text) layer.text = {};
   layer.text.text = textVal;
   if (!layer.text.style) layer.text.style = {};
   layer.text.style.fontSize = fontSize;
   layer.text.style.fillColor = hexToPsdColor(color);
 
-  selectLayer(layer._uid);
+  // Cập nhật ảnh xem trước nhỏ ở cột trái mà không làm mất focus bàn phím khi đang gõ chữ!
+  const previewBox = document.getElementById('selLayerPreviewBox');
+  if (previewBox) {
+    previewBox.innerHTML = '';
+    const img = document.createElement('img');
+    img.src = layer.canvas.toDataURL();
+    previewBox.appendChild(img);
+  }
+
   renderLayerTree();
   renderComposite();
-  setStatus(`Đã render văn bản mới với font "${fontFamily}" cho Layer "${layer.name}".`);
+  if (!isLiveTyping) {
+    setStatus(`Đã cập nhật văn bản với font "${fontFamily}" cho Layer "${layer.name}".`);
+  }
 }
 
-function renderRichTextToCanvas(text, fontFamily, fontSize, fontWeight, fillColor, strokeColor, strokeWidth) {
-  const lines = text.split(/\r?\n/);
+function renderRichTextToCanvas(text, fontFamily, fontSize, fontWeight, fillColor, strokeColor, strokeWidth, textAlign) {
+  const safeText = text && text.length > 0 ? text : ' ';
+  const lines = safeText.split(/\r?\n/);
   const temp = document.createElement('canvas');
   const tctx = temp.getContext('2d');
   const fontSpec = `${fontWeight} ${fontSize}px "${fontFamily}", "Be Vietnam Pro", "Segoe UI", Arial, sans-serif`;
   tctx.font = fontSpec;
 
   let maxW = 10;
+  const lineWidths = [];
   for (const line of lines) {
     const m = tctx.measureText(line);
+    lineWidths.push(m.width);
     if (m.width > maxW) maxW = m.width;
   }
 
   const pad = Math.max(12, strokeWidth * 2 + 8);
-  const lineHeight = Math.round(fontSize * 1.3);
+  const lineHeight = Math.round(fontSize * 1.28);
   const c = document.createElement('canvas');
   c.width = Math.ceil(maxW + pad * 2);
   c.height = Math.ceil(lines.length * lineHeight + pad * 2);
@@ -1747,7 +2460,12 @@ function renderRichTextToCanvas(text, fontFamily, fontSize, fontWeight, fillColo
   ctx.miterLimit = 2;
 
   lines.forEach((line, idx) => {
-    const x = pad;
+    let x = pad;
+    if (textAlign === 'center') {
+      x = Math.round((c.width - lineWidths[idx]) / 2);
+    } else if (textAlign === 'right') {
+      x = Math.round(c.width - pad - lineWidths[idx]);
+    }
     const y = pad + idx * lineHeight;
     if (strokeWidth > 0) {
       ctx.lineWidth = strokeWidth * 2;
@@ -1768,7 +2486,7 @@ function deleteSelectedLayer() {
   const idx = parentList.indexOf(layer);
   if (idx === -1) return;
 
-  pushUndoState(`Xóa Layer "${layer.name}"`);
+  pushUndoState(`Xóa "${layer.name}"`);
   const deletedName = layer.name || 'Layer';
   parentList.splice(idx, 1);
   selectedLayerId = null;
@@ -1783,7 +2501,7 @@ function deleteSelectedLayer() {
     document.getElementById('selectedLayerCard').style.display = 'none';
   }
 
-  setStatus(`Đã xóa Layer "${deletedName}" (Nhấn Ctrl+Z hoặc nút Hoàn tác nếu cần khôi phục).`);
+  setStatus(`Đã xóa "${deletedName}" (Nhấn Ctrl+Z hoặc nút Hoàn tác nếu cần khôi phục).`);
 }
 
 function moveSelectedLayer(direction) {
@@ -1796,7 +2514,7 @@ function moveSelectedLayer(direction) {
   const targetIdx = idx + direction;
   if (targetIdx < 0 || targetIdx >= parentList.length) return;
 
-  pushUndoState(`Đổi thứ tự Layer "${layer.name}"`);
+  pushUndoState(`Đổi thứ tự "${layer.name}"`);
   const temp = parentList[idx];
   parentList[idx] = parentList[targetIdx];
   parentList[targetIdx] = temp;
@@ -1804,7 +2522,7 @@ function moveSelectedLayer(direction) {
   rebuildFlatLayers();
   renderLayerTree();
   renderComposite();
-  setStatus(`Đã thay đổi thứ tự Layer "${layer.name}".`);
+  setStatus(`Đã thay đổi thứ tự "${layer.name}".`);
 }
 
 function toggleAllLayers(visible) {
@@ -1819,7 +2537,7 @@ function toggleAllLayers(visible) {
 }
 
 // ============================================================================
-// XUẤT FILE PNG, JPG, TẢI RIÊNG LAYER & LƯU FILE .PSD CHUẨN
+// XUẤT FILE PNG, JPG, TẢI RIÊNG LAYER / THƯ MỤC GROUP & LƯU FILE .PSD CHUẨN
 // ============================================================================
 function exportFullImage(format) {
   if (!currentPsd) return;
@@ -1863,35 +2581,47 @@ function confirmExportJPG() {
   }, 'image/jpeg', quality);
 }
 
+// Hỗ trợ tải riêng cả Layer đơn LẪN cả Thư mục (Group) dưới dạng file PNG!
 function exportSelectedLayerPNG() {
   const layer = findLayerById(selectedLayerId);
-  if (!layer || !layer.canvas) {
-    alert('Layer đang chọn là thư mục hoặc không có hình ảnh riêng để xuất.');
+  if (!layer) return;
+
+  let targetCanvas = layer.canvas;
+  if (layer.children) {
+    targetCanvas = renderGroupPreviewCanvas(layer);
+  }
+  if (!targetCanvas) {
+    alert('Mục đang chọn đang trống hoặc không có hình ảnh để xuất.');
     return;
   }
   const safeName = (layer.name || 'layer').replace(/[\\/:*?"<>|]/g, '_');
-  layer.canvas.toBlob((blob) => {
+  targetCanvas.toBlob((blob) => {
     triggerDownloadBlob(blob, `${safeName}.png`);
-    setStatus(`Đã tải riêng Layer "${layer.name}" dưới dạng PNG.`);
+    setStatus(`Đã tải riêng "${layer.name}" dưới dạng PNG.`);
   }, 'image/png');
 }
 
 function saveAsPSD() {
   if (!currentPsd) return;
-  setStatus('Đang đóng gói cấu trúc Layer, Smart Object, Hiệu ứng và tạo file .PSD...');
+  setStatus('Đang đóng gói cấu trúc Layer, Thư mục Group, Smart Object và tạo file .PSD...');
 
   setTimeout(() => {
     try {
       renderComposite();
       currentPsd.canvas = document.getElementById('mainCanvas');
+      // Lưu PSD ở hệ màu RGB 8-bit chuẩn để tương thích tối đa với mọi phiên bản Photoshop
+      currentPsd.colorMode = 3;
+      currentPsd.bitsPerChannel = 8;
+      currentPsd.channels = 4;
 
       function sanitizeForWrite(children) {
         if (!children) return;
         for (const item of children) {
-          if (item.canvas && !item.children) {
-            delete item.imageData;
+          delete item.imageData;
+          if (item.children) {
+            delete item.canvas;
+            sanitizeForWrite(item.children);
           }
-          if (item.children) sanitizeForWrite(item.children);
         }
       }
       sanitizeForWrite(currentPsd.children);
@@ -1948,7 +2678,7 @@ function openStructureReport() {
   }
   lines.push('');
   lines.push('--------------------------------------------------------------------------------');
-  lines.push('CÂY CẤU TRÚC LAYER (Từ trên xuống dưới theo thứ tự hiển thị Photoshop):');
+  lines.push('CÂY CẤU TRÚC LAYER & THƯ MỤC (Từ trên xuống dưới theo thứ tự hiển thị Photoshop):');
   lines.push('--------------------------------------------------------------------------------');
 
   for (const l of flatLayers) {
@@ -2111,7 +2841,11 @@ function parsePsdBinaryFallback(buffer) {
       stack[stack.length - 1].unshift(r);
     }
   }
-  return { width, height, channels, bitsPerChannel, colorMode, children: rootChildren };
+  const psdObj = { width, height, channels, bitsPerChannel, colorMode, children: rootChildren };
+  try {
+    decodeRawPsdChannelsFallback(buffer, psdObj);
+  } catch (e) {}
+  return psdObj;
 }
 
 function blobToImage(blob) {

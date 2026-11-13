@@ -3,15 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>PSD Studio Flat — Đọc & Chỉnh sửa PSD, Font Text, Smart Object, Hiệu ứng Layer</title>
+  <title>PSD Studio Flat — Đọc mọi File PSD, Sửa Chữ Trực Tiếp, Quản lý Thư mục Layer & Xuất PSD/PNG/JPG</title>
   <!-- Thư viện ag-psd đọc và ghi file Photoshop (.psd) -->
   <script src="https://cdn.jsdelivr.net/npm/ag-psd@28.3.0/dist/bundle.js"></script>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body data-theme="light">
 
-  <!-- Các Input File ẩn -->
-  <input type="file" id="psdFileInput" accept=".psd,.psb,.png,.jpg,.jpeg,.webp" multiple style="display:none" />
+  <!-- Các Input File ẩn (Hỗ trợ chọn từ bất kỳ ổ đĩa hay thư mục nào trên máy tính) -->
+  <input type="file" id="psdFileInput" accept=".psd,.psb,.png,.jpg,.jpeg,.webp,.svg" multiple style="display:none" />
   <input type="file" id="folderInput" webkitdirectory directory multiple style="display:none" />
   <input type="file" id="replaceImageInput" accept=".png,.jpg,.jpeg,.webp,.svg" style="display:none" />
   <input type="file" id="addLayerImageInput" accept=".png,.jpg,.jpeg,.webp,.svg" style="display:none" />
@@ -23,22 +23,25 @@
       <div class="brand-icon">Ps</div>
       <div>
         <div class="brand-title">PSD Studio Flat</div>
-        <div class="brand-subtitle">Chuẩn Font & Hiệu ứng PSD • Smart Object • Responsive Mobile/Tablet</div>
+        <div class="brand-subtitle">Đọc mọi PSD (RGB/CMYK) • Sửa Chữ Trực Tiếp • Quản lý Thư mục Group</div>
       </div>
     </div>
 
     <div class="toolbar-scroll">
-      <button class="btn btn-primary" onclick="document.getElementById('psdFileInput').click()">
-        📂 Mở PSD / Ảnh
+      <button class="btn btn-primary" onclick="document.getElementById('psdFileInput').click()" title="Mở file .PSD, .PSB, .PNG, .JPG từ bất kỳ thư mục hay ổ đĩa nào trên máy tính">
+        📂 Mở File PSD / Ảnh
       </button>
-      <button class="btn" onclick="document.getElementById('folderInput').click()" title="Quét toàn bộ file PSD & Font trong 1 thư mục hoặc ổ đĩa E:\">
-        🗂️ Quét Ổ đĩa / Thư mục
+      <button class="btn" onclick="document.getElementById('folderInput').click()" title="Chọn bất kỳ thư mục hoặc ổ đĩa nào (C:\, D:\, E:\, Desktop...) để liệt kê tất cả file PSD bên trong">
+        🗂️ Mở Thư mục bất kỳ
       </button>
       <button class="btn" onclick="document.getElementById('customFontInput').click()" title="Nạp thêm file Font (.TTF / .OTF) từ máy tính để sửa chữ không lỗi font">
         🔤 Nạp Font (.TTF/.OTF)
       </button>
       <button class="btn" id="btnUndo" disabled onclick="undoLastAction()">
         ↩️ Hoàn tác (<span id="undoCountLabel">0</span>)
+      </button>
+      <button class="btn" id="btnAddGroup" disabled onclick="addNewGroupFolder()">
+        📁+ Tạo Thư mục
       </button>
       <button class="btn" id="btnAddImageLayer" disabled onclick="document.getElementById('addLayerImageInput').click()">
         ➕ Thêm Ảnh
@@ -64,41 +67,55 @@
     </div>
   </header>
 
-  <!-- Thanh chuyển đổi nhanh giữa các file PSD khi mở nhiều file hoặc quét ổ đĩa E:\ -->
+  <!-- Thanh chuyển đổi nhanh giữa các file PSD khi mở nhiều file hoặc quét thư mục -->
   <div class="file-tabs-bar" id="fileTabsBar"></div>
 
   <!-- KHÔNG GIAN LÀM VIỆC CHÍNH (3 CỘT TRÊN DESKTOP / CHUYỂN TAB TRÊN MOBILE & TABLET) -->
   <div class="workspace" id="mainWorkspace" data-mobile-tab="canvas">
 
-    <!-- CỘT TRÁI: THÔNG TIN FILE PSD & CHỈNH SỬA LAYER / FONT / HIỆU ỨNG -->
+    <!-- CỘT TRÁI: THÔNG TIN FILE PSD & CHỈNH SỬA LAYER / THƯ MỤC / FONT / HIỆU ỨNG -->
     <aside class="panel panel-left">
       <div class="panel-header">
-        <span>🛠️ Chỉnh sửa Layer & Thuộc tính</span>
+        <span>🛠️ Chỉnh sửa Layer & Thư mục</span>
         <span id="selLayerTypeBadge" class="badge badge-pixel">Chưa chọn</span>
       </div>
       <div class="panel-body">
 
-        <!-- Khung chỉnh sửa Layer đang chọn -->
+        <!-- Khung chỉnh sửa Layer hoặc Thư mục (Group) đang chọn -->
         <div class="flat-card" id="selectedLayerCard" style="display:none;">
           <div class="flat-card-title">
-            <span>🎯 Thao tác Layer đang chọn</span>
+            <span>🎯 Thao tác Mục đang chọn</span>
           </div>
 
-          <!-- Hình xem trước riêng của Layer -->
-          <div class="layer-preview-box" id="selLayerPreviewBox">
+          <!-- Hình xem trước riêng của Layer hoặc của cả Thư mục (Group) -->
+          <div class="layer-preview-box" id="selLayerPreviewBox" title="Hình ảnh xem trước của Layer hoặc Thư mục đang chọn">
             <span style="font-size:12px; color:var(--text-secondary)">Không có hình ảnh</span>
+          </div>
+
+          <!-- Khung công cụ chuyên biệt khi đang chọn một Thư mục (Group) -->
+          <div id="groupActionsBox" class="flat-card" style="display:none; background-color:var(--warning-soft); border-color:var(--warning); margin-bottom:10px;">
+            <div style="font-size:12px; font-weight:800; color:#b45309; margin-bottom:4px;">📁 Công cụ Quản lý Thư mục (Group)</div>
+            <div id="groupChildCountLabel" style="font-size:11.5px; color:var(--text-primary); margin-bottom:8px; line-height:1.45;"></div>
+            <div class="form-grid-2" style="margin-bottom:6px;">
+              <button class="btn btn-sm" onclick="document.getElementById('addLayerImageInput').click()">➕ Thêm Ảnh vào Nhóm</button>
+              <button class="btn btn-sm" onclick="addNewTextLayer()">✍️ Thêm Chữ vào Nhóm</button>
+            </div>
+            <div class="form-grid-2">
+              <button class="btn btn-sm" onclick="addNewGroupFolder()">📁+ Tạo Nhóm con</button>
+              <button class="btn btn-sm btn-warning" onclick="mergeSelectedGroupToLayer()">🔗 Gộp Nhóm thành 1 Layer</button>
+            </div>
           </div>
 
           <div style="display:flex; flex-direction:column; gap:7px; margin-bottom:12px;">
             <button class="btn btn-primary" style="width:100%;" onclick="triggerReplaceLayerImage()">
-              🔄 Thay thế Layer bằng ảnh JPG / PNG...
+              🔄 Thay thế bằng ảnh JPG / PNG từ máy...
             </button>
             <div class="form-row" style="margin-bottom:2px;">
               <label>Chế độ khớp khung khi thay ảnh:</label>
               <select id="replaceFitMode">
-                <option value="contain">Giữ tỷ lệ ảnh - Vừa khít vùng Layer cũ (Contain)</option>
-                <option value="cover">Giữ tỷ lệ ảnh - Phủ kín vùng Layer cũ (Cover)</option>
-                <option value="stretch">Kéo giãn đúng bằng kích thước Layer cũ (Stretch)</option>
+                <option value="contain">Giữ tỷ lệ ảnh - Vừa khít vùng cũ (Contain)</option>
+                <option value="cover">Giữ tỷ lệ ảnh - Phủ kín vùng cũ (Cover)</option>
+                <option value="stretch">Kéo giãn đúng bằng kích thước cũ (Stretch)</option>
                 <option value="original">Giữ nguyên kích thước gốc của ảnh mới</option>
               </select>
             </div>
@@ -115,14 +132,14 @@
                 🛡️ Khôi phục gốc PSD
               </button>
               <button class="btn btn-danger" onclick="deleteSelectedLayer()">
-                🗑️ Xóa Layer
+                🗑️ Xóa mục này
               </button>
             </div>
           </div>
 
-          <!-- Thuộc tính cơ bản -->
+          <!-- Thuộc tính cơ bản (Dùng chung cho cả Layer đơn và Thư mục Group) -->
           <div class="form-row">
-            <label>Tên Layer</label>
+            <label>Tên Layer / Tên Thư mục</label>
             <input type="text" id="inpLayerName" oninput="updateSelectedLayerProps()" />
           </div>
 
@@ -135,6 +152,7 @@
               <label>Hòa trộn (Blend Mode)</label>
               <select id="inpLayerBlend" onchange="updateSelectedLayerProps()">
                 <option value="normal">Normal (Bình thường)</option>
+                <option value="pass-through">Pass Through (Mặc định Nhóm)</option>
                 <option value="multiply">Multiply</option>
                 <option value="screen">Screen</option>
                 <option value="overlay">Overlay</option>
@@ -179,21 +197,27 @@
             </div>
           </div>
 
-          <!-- BẢNG CHỈNH SỬA TEXT & FONT TIẾNG VIỆT (KHÔNG LỖI FONT) -->
-          <div class="flat-card" id="textEditBox" style="display:none; background-color:var(--bg-surface); margin-top:10px;">
-            <div class="flat-card-title">
-              <span>🔤 Văn bản & Font Chữ (Text Layer)</span>
+          <!-- BẢNG SỬA NỘI DUNG CHỮ TRỰC TIẾP TRÊN APP (LIVE TEXT EDITING) -->
+          <div class="flat-card" id="textEditBox" style="display:none; background-color:var(--bg-surface); margin-top:10px; border-color:var(--primary);">
+            <div class="flat-card-title" style="color:var(--primary);">
+              <span>🔤 Sửa Nội Dung Chữ Trực Tiếp</span>
+              <button class="btn btn-sm btn-primary" onclick="openInlineTextEditor()">🗔 Mở khung nổi</button>
             </div>
-            <div id="origPsdFontLabel" style="font-size:11px; color:var(--primary); margin-bottom:8px; font-weight:600;"></div>
+            <div id="origPsdFontLabel" style="font-size:11px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;"></div>
 
             <div class="form-row">
-              <label>Nội dung chữ (Hỗ trợ đầy đủ Unicode Tiếng Việt)</label>
-              <textarea id="inpLayerText" rows="3"></textarea>
+              <label style="display:flex; align-items:center; justify-content:space-between;">
+                <span>Nội dung văn bản (Gõ để sửa trực tiếp):</span>
+                <span style="display:inline-flex; align-items:center; gap:4px; color:var(--success); font-weight:700;">
+                  <input type="checkbox" id="chkLiveTextUpdate" checked /> Cập nhật tức thì
+                </span>
+              </label>
+              <textarea id="inpLayerText" rows="3" placeholder="Nhập nội dung chữ tại đây..." oninput="onLeftPanelTextLiveInput()"></textarea>
             </div>
 
             <div class="form-row">
-              <label>Chọn Font chữ (Hoặc bấm "🔤 Nạp Font" trên thanh công cụ)</label>
-              <select id="inpTextFont">
+              <label>Font chữ (Hoặc bấm "🔤 Nạp Font" trên thanh công cụ)</label>
+              <select id="inpTextFont" onchange="onLeftPanelTextLiveInput()">
                 <option value="Be Vietnam Pro">Be Vietnam Pro (Chuẩn Tiếng Việt)</option>
                 <option value="Montserrat">Montserrat (Hiện đại / Tiêu đề)</option>
                 <option value="Roboto">Roboto (Phổ thông)</option>
@@ -207,40 +231,47 @@
               </select>
             </div>
 
-            <div class="form-grid-2 form-row">
+            <div class="form-grid-3 form-row">
               <div>
                 <label>Độ đậm</label>
-                <select id="inpTextWeight">
-                  <option value="400">Thường (Regular 400)</option>
-                  <option value="600">Bán đậm (SemiBold 600)</option>
-                  <option value="700" selected>Đậm (Bold 700)</option>
-                  <option value="800">Rất đậm (ExtraBold 800)</option>
+                <select id="inpTextWeight" onchange="onLeftPanelTextLiveInput()">
+                  <option value="400">Thường</option>
+                  <option value="600">Bán đậm</option>
+                  <option value="700" selected>Đậm (Bold)</option>
+                  <option value="800">Rất đậm</option>
                 </select>
               </div>
               <div>
                 <label>Cỡ chữ (px)</label>
-                <input type="number" id="inpTextSize" value="48" min="6" max="800" />
+                <input type="number" id="inpTextSize" value="48" min="6" max="800" oninput="onLeftPanelTextLiveInput()" />
+              </div>
+              <div>
+                <label>Căn lề</label>
+                <select id="inpTextAlign" onchange="onLeftPanelTextLiveInput()">
+                  <option value="left">Trái</option>
+                  <option value="center">Giữa</option>
+                  <option value="right">Phải</option>
+                </select>
               </div>
             </div>
 
-            <div class="form-grid-2 form-row">
+            <div class="form-grid-3 form-row">
               <div>
                 <label>Màu chữ</label>
-                <input type="color" id="inpTextColor" value="#ffffff" style="width:100%; height:34px; border:1.5px solid var(--border-flat); border-radius:6px;" />
+                <input type="color" id="inpTextColor" value="#ffffff" oninput="onLeftPanelTextLiveInput()" style="width:100%; height:34px; border:1.5px solid var(--border-flat); border-radius:6px;" />
               </div>
               <div>
-                <label>Màu viền chữ (Outline)</label>
-                <input type="color" id="inpTextOutlineColor" value="#000000" style="width:100%; height:34px; border:1.5px solid var(--border-flat); border-radius:6px;" />
+                <label>Màu viền chữ</label>
+                <input type="color" id="inpTextOutlineColor" value="#000000" oninput="onLeftPanelTextLiveInput()" style="width:100%; height:34px; border:1.5px solid var(--border-flat); border-radius:6px;" />
+              </div>
+              <div>
+                <label>Dày viền (px)</label>
+                <input type="number" id="inpTextOutlineWidth" value="0" min="0" max="40" oninput="onLeftPanelTextLiveInput()" />
               </div>
             </div>
 
-            <div class="form-row">
-              <label>Độ dày viền chữ trực tiếp (Outline px — 0 là tắt)</label>
-              <input type="number" id="inpTextOutlineWidth" value="0" min="0" max="40" />
-            </div>
-
-            <button class="btn btn-primary" style="width:100%;" onclick="applyTextToSelectedLayer()">
-              ✍️ Áp dụng văn bản & Font mới lên Layer
+            <button class="btn btn-primary" style="width:100%;" onclick="applyTextToSelectedLayer(false)">
+              ✍️ Áp dụng văn bản & Lưu mốc Hoàn tác
             </button>
           </div>
 
@@ -323,7 +354,7 @@
               <div class="prop-value" id="docResolution">—</div>
             </div>
             <div class="prop-box" style="grid-column: span 2;">
-              <div class="prop-label">Thống kê Cấu trúc Layer</div>
+              <div class="prop-label">Thống kê Cấu trúc Layer & Thư mục</div>
               <div class="prop-value" id="docLayerStats">—</div>
             </div>
           </div>
@@ -335,27 +366,30 @@
     <!-- CỘT GIỮA: VÙNG PREVIEW TRỰC TIẾP (CANVAS TƯƠNG TÁC ĐA ĐIỂM) -->
     <main class="canvas-area">
       <div class="canvas-toolbar">
-        <div style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+        <div style="display:flex; align-items:center; gap:5px; flex-wrap:wrap;">
           <span>🔍 <strong id="zoomLabel">100%</strong></span>
           <button class="btn btn-sm" onclick="zoomBy(0.8)">➖</button>
           <button class="btn btn-sm" onclick="zoomBy(1.25)">➕</button>
-          <button class="btn btn-sm" onclick="fitCanvasToScreen()">⛶ Vừa khung</button>
+          <button class="btn btn-sm" onclick="fitCanvasToScreen()">⛶ Vừa màn hình</button>
           <button class="btn btn-sm" onclick="setZoom(1)">1:1</button>
+          <button class="btn btn-sm btn-primary" onclick="openInlineTextEditor()" title="Mở hộp sửa nội dung chữ trực tiếp cho Layer đang chọn">
+            ✍️ Sửa chữ trực tiếp
+          </button>
         </div>
 
-        <div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap;">
           <select id="selRenderMode" onchange="renderComposite()" style="background:var(--bg-muted); border:1.5px solid var(--border-flat); color:var(--text-primary); padding:4px 8px; border-radius:6px; font-size:11.5px; font-weight:600;">
-            <option value="live_layers">🧩 Chế độ Kết hợp Layer Động (Sửa/Xóa/Ẩn/Hiện trực tiếp)</option>
-            <option value="psd_composite">✨ Chế độ Ảnh Gộp Gốc Photoshop (100% Font & FX gốc)</option>
+            <option value="live_layers">🧩 Kết hợp Layer Động (Sửa Chữ/Thư mục/Xóa trực tiếp)</option>
+            <option value="psd_composite">✨ Ảnh Gộp Gốc Photoshop (100% Font & FX gốc)</option>
           </select>
 
           <label style="display:flex; align-items:center; gap:4px; cursor:pointer; font-weight:600; color:var(--primary);">
             <input type="checkbox" id="chkAutoPickLayer" checked />
-            👆 Chạm chọn Layer
+            👆 Click chọn Layer
           </label>
           <label style="display:flex; align-items:center; gap:4px; cursor:pointer; font-weight:600; color:#d97706;">
             <input type="checkbox" id="chkMoveLayerMode" onchange="toggleMoveLayerMode()" />
-            ✥ Kéo di chuyển Layer
+            ✥ Kéo di chuyển Layer/Nhóm
           </label>
           <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
             <input type="checkbox" id="chkShowBounds" checked onchange="updateSelectionBox()" />
@@ -369,21 +403,56 @@
       </div>
 
       <div class="canvas-viewport" id="canvasViewport">
+        <!-- HỘP SỬA CHỮ NỔI TRỰC TIẾP TRÊN MÀN HÌNH CANVAS -->
+        <div class="inline-canvas-editor" id="inlineTextEditorModal">
+          <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom:8px;">
+            <strong style="font-size:13px; color:var(--primary);">✍️ Sửa nội dung chữ trực tiếp trên màn hình</strong>
+            <button class="btn btn-sm" onclick="closeInlineTextEditor()">✖ Đóng (Esc)</button>
+          </div>
+          <div class="form-row">
+            <textarea id="inlineTextInput" rows="2" placeholder="Gõ nội dung chữ mới vào đây..." oninput="onInlineTextLiveChange()"></textarea>
+          </div>
+          <div class="form-grid-3" style="align-items:end;">
+            <div>
+              <label style="font-size:11px; color:var(--text-secondary);">Font chữ</label>
+              <select id="inlineTextFont" onchange="onInlineTextLiveChange()" style="width:100%; padding:6px; border:1.5px solid var(--border-flat); border-radius:6px; background:var(--bg-surface); color:var(--text-primary);">
+                <option value="Be Vietnam Pro">Be Vietnam Pro</option>
+                <option value="Montserrat">Montserrat</option>
+                <option value="Roboto">Roboto</option>
+                <option value="Inter">Inter</option>
+                <option value="Oswald">Oswald</option>
+                <option value="Anton">Anton</option>
+                <option value="Playfair Display">Playfair Display</option>
+                <option value="Arial">Arial</option>
+              </select>
+            </div>
+            <div>
+              <label style="font-size:11px; color:var(--text-secondary);">Cỡ chữ (px)</label>
+              <input type="number" id="inlineTextSize" value="48" min="6" max="800" oninput="onInlineTextLiveChange()" style="width:100%; padding:6px; border:1.5px solid var(--border-flat); border-radius:6px; background:var(--bg-surface); color:var(--text-primary);" />
+            </div>
+            <div>
+              <label style="font-size:11px; color:var(--text-secondary);">Màu chữ</label>
+              <input type="color" id="inlineTextColor" value="#ffffff" oninput="onInlineTextLiveChange()" style="width:100%; height:33px; border:1.5px solid var(--border-flat); border-radius:6px;" />
+            </div>
+          </div>
+        </div>
+
         <!-- Màn hình chào Flat Design khi chưa chọn file -->
         <div class="empty-dropzone" id="emptyDropzone">
           <div style="font-size:44px; margin-bottom:10px;">🎨</div>
-          <h2>Kéo & Thả File .PSD, .JPG, .PNG vào đây</h2>
+          <h2>Mở hoặc Kéo & Thả mọi File .PSD, .JPG, .PNG</h2>
           <p>
-            • Giữ nguyên <strong>100% Font chữ gốc, Layer Mask, Clipping Mask & Hiệu ứng Layer (FX)</strong> trong file PSD.<br/>
-            • Hỗ trợ nạp thêm <strong>Font chữ (.TTF / .OTF)</strong>, thay thế ảnh Layer / Smart Object, xóa Layer và xuất ra <strong>.PNG, .JPG, .PSD</strong>.<br/>
-            • Tương thích hoàn toàn với <strong>Máy tính, Máy tính bảng (Tablet) và Điện thoại (Mobile)</strong>.
+            • Đọc được <strong>tất cả các file .PSD / .PSB</strong> (kể cả hệ màu RGB và CMYK in ấn) ở <strong>bất kỳ ổ đĩa hay thư mục nào trên máy tính</strong> (<code>C:\</code>, <code>D:\</code>, <code>E:\</code>, <code>Desktop</code>, <code>Downloads</code>...).<br/>
+            • <strong>Sửa nội dung chữ (Font Text) trực tiếp</strong> trên ứng dụng (nhấp đúp vào chữ trên màn hình hoặc gõ ở cột trái).<br/>
+            • <strong>Đọc, đóng/mở và chỉnh sửa mọi Thư mục (Group)</strong> trong cây Layer.<br/>
+            • Tương thích với <strong>Máy tính, Tablet và Điện thoại</strong>.
           </p>
           <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap;">
             <button class="btn btn-primary" style="padding:10px 18px; font-size:13.5px;" onclick="document.getElementById('psdFileInput').click()">
-              📂 Chọn File .PSD / Ảnh (từ E:\)
+              📂 Chọn File .PSD / Ảnh (Bất kỳ ổ đĩa nào)
             </button>
             <button class="btn" style="padding:10px 18px; font-size:13.5px;" onclick="document.getElementById('folderInput').click()">
-              🗂️ Quét cả Ổ đĩa / Thư mục E:\
+              🗂️ Chọn cả Thư mục chứa PSD
             </button>
           </div>
         </div>
@@ -398,31 +467,33 @@
       </div>
     </main>
 
-    <!-- CỘT PHẢI: DANH SÁCH CÂY LAYER & SMART OBJECTS -->
+    <!-- CỘT PHẢI: DANH SÁCH CÂY LAYER & THƯ MỤC GROUP ĐA CẤP -->
     <aside class="panel panel-right">
       <div class="panel-header">
-        <span>📑 Cây Layer (<span id="layerCountHeader">0</span>)</span>
-        <div style="display:flex; gap:4px;">
-          <button class="btn btn-sm" onclick="toggleAllLayers(true)">👁 Hiện hết</button>
-          <button class="btn btn-sm" onclick="toggleAllLayers(false)">🚫 Ẩn hết</button>
+        <span>📑 Cây Layer & Thư mục (<span id="layerCountHeader">0</span>)</span>
+        <div style="display:flex; gap:3px; flex-wrap:wrap;">
+          <button class="btn btn-sm" onclick="toggleAllGroupsCollapsed(false)" title="Mở rộng tất cả các Thư mục (Group)">📂 Mở nhóm</button>
+          <button class="btn btn-sm" onclick="toggleAllGroupsCollapsed(true)" title="Thu gọn tất cả các Thư mục (Group)">📁 Gọn nhóm</button>
+          <button class="btn btn-sm" onclick="toggleAllLayers(true)" title="Hiện tất cả">👁</button>
+          <button class="btn btn-sm" onclick="toggleAllLayers(false)" title="Ẩn tất cả">🚫</button>
         </div>
       </div>
 
       <div class="layer-search">
-        <input type="text" id="searchLayerInput" placeholder="Tìm tên layer, chữ..." oninput="renderLayerTree()" />
+        <input type="text" id="searchLayerInput" placeholder="Tìm tên layer, thư mục, nội dung chữ..." oninput="renderLayerTree()" />
         <select id="filterLayerType" onchange="renderLayerTree()">
           <option value="all">Tất cả</option>
-          <option value="smart">Smart Object</option>
+          <option value="group">Thư mục (Group)</option>
           <option value="text">Chữ (Text)</option>
+          <option value="smart">Smart Object</option>
           <option value="pixel">Ảnh (Pixel)</option>
           <option value="shape">Shape/Vector</option>
-          <option value="group">Group</option>
         </select>
       </div>
 
       <div class="layer-list" id="layerListContainer">
         <div style="padding:30px 14px; text-align:center; color:var(--text-secondary); font-size:13px;">
-          Hãy mở một file <strong>.PSD</strong> để hiển thị danh sách tất cả các Layer, Group, Text và Smart Object tại đây.
+          Hãy mở một file <strong>.PSD</strong> từ bất kỳ thư mục nào trên máy để xem và chỉnh sửa toàn bộ cây Thư mục (Group), Layer, Chữ và Smart Object.
         </div>
       </div>
     </aside>
@@ -441,7 +512,7 @@
     </button>
     <button class="mob-nav-btn" data-tab="edit" onclick="switchMobileTab('edit')">
       <span class="ico">🛠️</span>
-      <span>Sửa & Thay Layer</span>
+      <span>Sửa Chữ & Nhóm</span>
     </button>
     <button class="mob-nav-btn" onclick="document.getElementById('psdFileInput').click()">
       <span class="ico">📂</span>
@@ -451,8 +522,8 @@
 
   <!-- Thanh trạng thái dưới cùng (Desktop) -->
   <footer class="statusbar">
-    <div id="statusText">Sẵn sàng — Hãy chọn hoặc kéo thả file .PSD vào ứng dụng.</div>
-    <div>Mẹo: Nhấp vào đối tượng trên ảnh để chọn Layer • Phím <strong>Delete</strong>: Xóa Layer • <strong>Ctrl+Z</strong>: Hoàn tác.</div>
+    <div id="statusText">Sẵn sàng — Mở file .PSD từ bất kỳ thư mục nào, hoặc kéo thả file vào màn hình.</div>
+    <div>Mẹo: <strong>Nhấp đúp (Double-click)</strong> vào chữ để sửa trực tiếp • Nhấp vào <strong>▼/▶</strong> để đóng/mở Thư mục • <strong>Ctrl+Z</strong>: Hoàn tác.</div>
   </footer>
 
   <!-- MODAL 1: BÁO CÁO PHÂN TÍCH CẤU TRÚC PSD CHI TIẾT -->
